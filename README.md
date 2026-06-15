@@ -76,6 +76,18 @@ Run `make pr-ready` before committing; CI (`.github/workflows/ci.yml`) runs the
 same target. See [`AGENTS.md`](./AGENTS.md) for conventions and architecture
 notes.
 
+### Model weights & deployment
+
+The ONNX weights (~109 MB, oemer's MIT release) are not committed. Locally,
+`make models` downloads them into `public/models/`, which the dev server
+(`scripts/serve.ts`) serves at `/models/<file>`. On Netlify the build runs
+`make stage-models`, which seeds the weights into the deploy's **Netlify Blobs**
+store (`.netlify/blobs/deploy/`); a function (`netlify/functions/models.mts`)
+streams them back same-origin at the same `/models/<file>` URLs (kept out of the
+static deploy, and same-origin is required under COEP). File names are versioned
+so the URLs are immutable and cache forever; bump `MODEL_VERSION` in
+`lib/models/manifest.ts` to roll out new weights.
+
 ## Licensing
 
 This project's own source is intended to be permissively licensed. The

@@ -31,8 +31,10 @@ await cp(
   "dist/pdf.worker.min.mjs",
 );
 
-// Copy static assets (model weights, etc.) if present. public/ is optional —
-// the weights are downloaded out of band (see `make models`) and gitignored.
+// Copy static assets from public/ if present. The model weights under
+// public/models/ are deliberately excluded — they are served from Netlify Blobs
+// (see scripts/stage-models.ts + netlify/functions/models.mts), not the static
+// deploy. Locally they stay in public/models/ and scripts/serve.ts serves them.
 async function exists(path: string): Promise<boolean> {
   try {
     await stat(path);
@@ -42,7 +44,11 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 if (await exists("public")) {
-  await cp("public", "dist", { recursive: true });
+  await cp("public", "dist", {
+    recursive: true,
+    filter: (source) =>
+      source !== "public/models" && !source.startsWith("public/models/"),
+  });
 }
 
 await cp("index.html", "dist/index.html");

@@ -33,9 +33,15 @@ build: node_modules
 	$(bun) run scripts/build.ts
 
 # Download the oemer ONNX weights into public/models/ (gitignored, ~109 MB).
-# Needed once before `make build`/`make dev` can serve a working app.
+# Needed once before `make build`/`make dev` can serve a working app locally.
 models: node_modules
 	$(bun) run scripts/download-models.ts
+
+# Stage the weights into .netlify/blobs/deploy/ so Netlify seeds them into the
+# deploy's blob store (served by netlify/functions/models.mts). Run during the
+# Netlify build, before `build`.
+stage-models: node_modules
+	$(bun) run scripts/stage-models.ts
 
 # Pre-create the output directory as the host user so Docker (running as root)
 # writes into it rather than creating a root-owned directory.

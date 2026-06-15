@@ -1,9 +1,14 @@
 [build]
-  # `make models` downloads the ONNX weights (gitignored, ~109 MB) into
-  # public/models/ so the build copies them into dist/ and serves them
-  # same-origin (required under COEP). It is a no-op once they are cached.
-  command = "make models build"
+  # `make stage-models` downloads the ONNX weights (~109 MB) and seeds them into
+  # .netlify/blobs/deploy/ so Netlify stores them in the deploy's blob store; the
+  # models function (netlify/functions/models.mts) streams them back same-origin
+  # at /models/<file> (required under COEP). They are kept out of the static
+  # publish directory. `build` then bundles the SPA.
+  command = "make stage-models build"
   publish = "dist"
+
+[functions]
+  directory = "netlify/functions"
 
 [build.environment]
   BUN_VERSION = "1"

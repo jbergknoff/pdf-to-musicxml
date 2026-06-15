@@ -71,7 +71,8 @@ Playwright run inside containers via `docker compose`; nothing is installed on
 the host. (On Netlify, `NETLIFY=true` makes the Makefile run the tools directly.)
 
 ```sh
-make models           # download oemer ONNX weights -> public/models/ (once)
+make models           # download oemer ONNX weights -> public/models/ (local, once)
+make stage-models     # download + seed weights into .netlify/blobs/deploy/ (Netlify)
 make build            # bun build src/ -> dist/ (+ ORT wasm, pdf worker, public/)
 make dev              # build, then rebuild on change (run `make up` to serve)
 make up / make down   # start/stop the static server on :3456
@@ -102,6 +103,19 @@ Phase 0 manual acceptance check and is run on demand.
 
 ## Deployment
 
-Netlify deploys `dist/` (`make build`); `netlify.toml` sets the COOP/COEP headers
-in production. The Bun version is pinned via `BUN_VERSION` in `netlify.toml`, and
-`docker-compose.yml` reads the same variable so both environments stay in sync.
+Netlify builds with `make stage-models build` and deploys `dist/`;
+`netlify.toml` sets the COOP/COEP headers in production. The Bun version is
+pinned via `BUN_VERSION` in `netlify.toml`, and `docker-compose.yml` reads the
+same variable so both environments stay in sync.
+
+The model weights are **not** in the static deploy. `make stage-models`
+downloads them and writes them under `.netlify/blobs/deploy/`, which Netlify
+seeds into the deploy's blob store; `netlify/functions/models.mts` then streams
+them back same-origin at `/models/<file>` (required under COEP). File names are
+versioned (`lib/models/manifest.ts`, `MODEL_VERSION`) so each URL is immutable —
+the function serves a long-lived cache header, the browser also keeps the bytes
+in Cache Storage, and Netlify de-duplicates the per-deploy blob upload by digest.
+Bump `MODEL_VERSION` to roll out new weights. `lib/models/manifest.ts` is the
+shared source of truth for the browser registry, the stage script, and the
+function. Locally there is no function, so `scripts/serve.ts` serves the same
+`/models/<file>` URLs from `public/models/` (populated by `make models`).

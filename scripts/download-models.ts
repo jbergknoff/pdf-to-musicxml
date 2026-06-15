@@ -1,17 +1,15 @@
 /**
- * Downloads the oemer segmentation model weights into public/models/ so the
- * build can serve them same-origin (cross-origin isolation blocks third-party
- * fetches that lack CORP headers). The weights are gitignored and total ~109 MB;
- * run this once via `make models`.
+ * Downloads the oemer model weights into public/models/ for local development,
+ * under their versioned manifest file names so scripts/serve.ts can serve them
+ * at the same `/models/<file>` URLs the deployed app uses (where a Netlify
+ * function streams them from Blobs instead). The weights are gitignored and
+ * total ~109 MB; run once via `make models`.
  *
  * Source: oemer's GitHub release `checkpoints` tag (MIT-licensed).
  */
 import { mkdir, stat } from "node:fs/promises";
+import { MODEL_ENTRIES } from "../lib/models/manifest";
 
-const RELEASE_BASE =
-  "https://github.com/BreezeWhite/oemer/releases/download/checkpoints";
-
-const MODELS = ["1st_model.onnx", "2nd_model.onnx"];
 const TARGET_DIRECTORY = "public/models";
 
 async function exists(path: string): Promise<boolean> {
@@ -25,19 +23,19 @@ async function exists(path: string): Promise<boolean> {
 
 await mkdir(TARGET_DIRECTORY, { recursive: true });
 
-for (const model of MODELS) {
-  const target = `${TARGET_DIRECTORY}/${model}`;
+for (const entry of MODEL_ENTRIES) {
+  const target = `${TARGET_DIRECTORY}/${entry.fileName}`;
   if (await exists(target)) {
-    console.log(`✓ ${model} already present`);
+    console.log(`✓ ${entry.fileName} already present`);
     continue;
   }
-  console.log(`Downloading ${model}…`);
-  const response = await fetch(`${RELEASE_BASE}/${model}`);
+  console.log(`Downloading ${entry.fileName}…`);
+  const response = await fetch(entry.sourceUrl);
   if (!response.ok) {
-    throw new Error(`Failed to download ${model}: ${response.status}`);
+    throw new Error(`Failed to download ${entry.fileName}: ${response.status}`);
   }
   await Bun.write(target, response);
-  console.log(`✓ ${model}`);
+  console.log(`✓ ${entry.fileName}`);
 }
 
 console.log(`Models ready in ${TARGET_DIRECTORY}/`);

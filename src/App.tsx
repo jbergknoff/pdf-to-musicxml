@@ -39,7 +39,7 @@ export function App({ backend }: AppProps) {
 
       setStatus("Loading segmentation models…");
       const models = await loadSegmentationModels(backend, {
-        onAssetLoading: (asset) => setStatus(`Loading ${asset.name}…`),
+        onAssetLoading: (entry) => setStatus(`Loading ${entry.fileName}…`),
       });
 
       const masks = await segment(image, models, {

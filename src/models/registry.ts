@@ -1,64 +1,49 @@
 import type { InferenceBackend } from "../../lib/runtime/inference-backend";
 import {
+  MODEL_MANIFEST,
+  type ModelManifestEntry,
+  modelUrl,
+} from "../../lib/models/manifest";
+import {
   createSegmentationModels,
   type SegmentationModels,
 } from "../../lib/segmentation/segment";
 
 /**
- * Locates and loads the ONNX model weights, caching the downloaded bytes so
- * repeat visits (and offline use) skip the network.
+ * Loads the ONNX model weights, caching the downloaded bytes so repeat visits
+ * (and offline use) skip the network.
  *
- * The weights are large (~70 MB + ~38 MB) and must be served from the same
- * origin: cross-origin isolation (COEP `require-corp`) blocks third-party
- * fetches that lack CORP headers. They are therefore expected under `/models/`
- * (run `make models` to download them into `public/models/`, which the build
- * copies into `dist/`). Once fetched they are stored in the Cache Storage API.
+ * The weights are large (~70 MB + ~38 MB) and live in Netlify Blobs rather than
+ * the static deploy; a function streams them back from the same origin at
+ * `/models/<file>` (see netlify/functions/models.mts). Same-origin matters under
+ * cross-origin isolation (COEP `require-corp`). The versioned, immutable URLs
+ * come from the shared manifest; once fetched the bytes are stored in the Cache
+ * Storage API. Locally, `scripts/serve.ts` serves the same paths from disk.
  */
-
-export interface ModelAsset {
-  /** File name, used for logging and cache keys. */
-  name: string;
-  /** Same-origin URL the weights are served from. */
-  url: string;
-}
-
-const MODEL_BASE_URL = "/models/";
-
-export const SEGMENTATION_MODEL_ASSETS = {
-  /** oemer `unet_big` — staffline + symbol segmentation. */
-  staffSymbol: {
-    name: "1st_model.onnx",
-    url: `${MODEL_BASE_URL}1st_model.onnx`,
-  },
-  /** oemer `seg_net` — stems/rests, noteheads, clefs/keys. */
-  symbolDetail: {
-    name: "2nd_model.onnx",
-    url: `${MODEL_BASE_URL}2nd_model.onnx`,
-  },
-} satisfies Record<string, ModelAsset>;
 
 const CACHE_NAME = "pdf-to-musicxml-models-v1";
 
 /** Fetch a model's bytes, serving from Cache Storage when available. */
-async function fetchModelBytes(asset: ModelAsset): Promise<Uint8Array> {
+async function fetchModelBytes(entry: ModelManifestEntry): Promise<Uint8Array> {
+  const url = modelUrl(entry);
   const cache =
     typeof caches !== "undefined" ? await caches.open(CACHE_NAME) : undefined;
-  let response = await cache?.match(asset.url);
+  let response = await cache?.match(url);
   if (response === undefined) {
-    response = await fetch(asset.url);
+    response = await fetch(url);
     if (!response.ok) {
       throw new Error(
-        `Failed to fetch model "${asset.name}" from ${asset.url}: ${response.status}`,
+        `Failed to fetch model "${entry.fileName}" from ${url}: ${response.status}`,
       );
     }
-    await cache?.put(asset.url, response.clone());
+    await cache?.put(url, response.clone());
   }
   return new Uint8Array(await response.arrayBuffer());
 }
 
 export interface LoadModelsOptions {
-  /** Reports which asset is being loaded, for UI status. */
-  onAssetLoading?: (asset: ModelAsset) => void;
+  /** Reports which model is being loaded, for UI status. */
+  onAssetLoading?: (entry: ModelManifestEntry) => void;
 }
 
 /**
@@ -69,16 +54,12 @@ export async function loadSegmentationModels(
   backend: InferenceBackend,
   options: LoadModelsOptions = {},
 ): Promise<SegmentationModels> {
-  options.onAssetLoading?.(SEGMENTATION_MODEL_ASSETS.staffSymbol);
-  const staffSymbolBytes = await fetchModelBytes(
-    SEGMENTATION_MODEL_ASSETS.staffSymbol,
-  );
+  options.onAssetLoading?.(MODEL_MANIFEST.staffSymbol);
+  const staffSymbolBytes = await fetchModelBytes(MODEL_MANIFEST.staffSymbol);
   const staffSymbolSession = await backend.createSession(staffSymbolBytes);
 
-  options.onAssetLoading?.(SEGMENTATION_MODEL_ASSETS.symbolDetail);
-  const symbolDetailBytes = await fetchModelBytes(
-    SEGMENTATION_MODEL_ASSETS.symbolDetail,
-  );
+  options.onAssetLoading?.(MODEL_MANIFEST.symbolDetail);
+  const symbolDetailBytes = await fetchModelBytes(MODEL_MANIFEST.symbolDetail);
   const symbolDetailSession = await backend.createSession(symbolDetailBytes);
 
   return createSegmentationModels(staffSymbolSession, symbolDetailSession);
