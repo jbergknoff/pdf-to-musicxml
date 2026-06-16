@@ -14,12 +14,14 @@ staff (reached in phases, monophonic single staff first).
 Design and full build plan live in `PLAN.md`. This file covers how to work in
 the repo (tooling, conventions). Keep it current when the workflow changes.
 
-## What exists now (Phases 0–1)
+## What exists now (Phases 0–2)
 
 Phase 0 is the toolchain scaffold (see `PLAN.md` §6): `bun build` bundles ORT
 Web's threaded WASM and the page is cross-origin isolated. Phase 1 adds
 segmentation — the two oemer UNets running in the browser with their masks
-overlaid on the page (`PLAN.md` §7).
+overlaid on the page (`PLAN.md` §7). Phase 2 adds staff-structure detection —
+recovering five-line staves and the unit size from the staff mask and drawing
+them on the page.
 
 Phase 0 foundation:
 
@@ -59,6 +61,24 @@ Phase 1 segmentation (all of `lib/` is runtime-agnostic and unit-tested):
   PDF first page via pdf.js).
 - `src/App.tsx` + `src/components/` — drop a score, run segmentation, overlay the
   masks with per-layer toggles.
+
+Phase 2 staff structure (pure algorithm in `lib/staves/`, fully unit-tested):
+
+- `lib/types.ts` — adds `Staff` (five staffline row centers, `unitSize`,
+  `left`/`right` extent) and `StaffStructure` (staves + page-level `unitSize`).
+- `lib/staves/staffline-detection.ts` — horizontal projection of the staff mask,
+  thresholded and grouped into runs → one sub-pixel `StafflineRow` per line.
+- `lib/staves/unit-size.ts` — `estimateUnitSize` (median consecutive gap; the
+  many within-staff gaps outvote the few between-staff ones) plus a `median`
+  helper.
+- `lib/staves/detect-staves.ts` — orchestrates the two above: estimate the unit
+  size, cut the lines into five-line staves (new staff at a large gap or every
+  fifth line), drop non-five-line groups, and measure each staff's horizontal
+  extent from a vertical projection over its own row band.
+- `src/App.tsx` runs `detectStaves(masks.staff)` after segmentation;
+  `src/components/SegmentationView.tsx` strokes each staff's bounding box and
+  five lines over the canvas (toggleable) and reports the staff count + unit
+  size.
 
 The model weights (~109 MB, oemer's MIT release) are **not** committed. Run
 `make models` to download them into `public/models/` (gitignored) before

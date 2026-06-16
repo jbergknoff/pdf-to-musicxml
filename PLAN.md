@@ -277,20 +277,20 @@ App().then((node) => render(node, document.getElementById("app")!));
 
 ## 7. Phased build order
 
-Status: **Phases 0 and 1 are done** (see `AGENTS.md` for the as-built notes).
+Status: **Phases 0–2 are done** (see `AGENTS.md` for the as-built notes).
 
 | Phase | Deliverable | De-risks |
 |---|---|---|
 | **0 — Scaffold** ✅ | bun SPA; ORT Web reports provider; COOP/COEP true. | toolchain, isolation, WebGPU path. |
 | **1 — Segmentation** ✅ | oemer UNets running; masks overlaid on page; PDF/image decode. | model opset/layout/quantization, tiling, memory, perf. **Biggest infra risk — front-loaded.** |
-| **2 — Staff structure** | detected staves + unit size drawn on page. | pure algorithm; high confidence. |
+| **2 — Staff structure** ✅ | detected staves + unit size drawn on page. | pure algorithm; high confidence. |
 | **3 — Mono POC** | one staff → TrOMR → minimal single-voice MusicXML → OSMD preview + download. **First end-to-end output.** | token decoding — biggest correctness unknown. |
 | **4 — Full single staff** | key/time sig, rests, accidentals, beams, multi-measure, multi-page. | assembly fidelity. |
 | **5 — Grand staff** | brace detection, paired staves, two-staff part, per-staff voices. | piano target reached. |
 | **6 — Robustness** | phone-photo dewarp/deskew, error handling, quantization + perf tuning. | real-world inputs. |
 | **7 — Polish** | caching, offline service worker, download/correction UX. | production feel. |
 
-Deferred / not-yet-done from the early phases (pull in before or alongside Phase 2):
+Deferred / not-yet-done from the early phases (pull in before or alongside Phase 3):
 - **Web Worker** — the whole pipeline still runs on the main thread, so segmentation pegs the UI (the page can't repaint smooth progress and feels frozen on the WASM backend). Moving inference + model loading into `src/worker/` is the next responsiveness fix. Originally listed under Phase 0; not built yet.
 - **PDF→canvas decode** landed in Phase 1 (not Phase 0) — done.
 - **int8 quantization** of the weights (download-size/perf) — not done; revisit in Phase 6.

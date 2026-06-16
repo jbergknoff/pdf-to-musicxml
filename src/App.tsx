@@ -2,15 +2,21 @@ import { useState } from "preact/hooks";
 import type { InferenceBackend } from "../lib/runtime/inference-backend";
 import { resizeToPixelBudget } from "../lib/input/preprocess";
 import { segment } from "../lib/segmentation/segment";
-import type { RgbaImage, SegmentationMasks } from "../lib/types";
+import { detectStaves } from "../lib/staves/detect-staves";
+import type {
+  RgbaImage,
+  SegmentationMasks,
+  StaffStructure,
+} from "../lib/types";
 import { FileDrop } from "./components/FileDrop";
 import { SegmentationView } from "./components/SegmentationView";
 import { decodeFile } from "./input/decode";
 import { loadSegmentationModels } from "./models/registry";
 
 /**
- * Phase 1 app: drop a score, run the two oemer segmentation UNets in the
- * browser, and overlay the detected stafflines and symbols on the page.
+ * Phases 1–2 app: drop a score, run the two oemer segmentation UNets in the
+ * browser, overlay the detected stafflines and symbols on the page, and detect
+ * the staff structure (five-line staves + unit size) from the staff mask.
  */
 
 interface AppProps {
@@ -20,6 +26,7 @@ interface AppProps {
 interface Result {
   image: RgbaImage;
   masks: SegmentationMasks;
+  staves: StaffStructure;
 }
 
 export function App({ backend }: AppProps) {
@@ -52,8 +59,11 @@ export function App({ backend }: AppProps) {
           setStatus(`Segmenting… ${Math.round(fraction * 100)}%`),
       });
 
+      setStatus("Detecting staves…");
+      const staves = detectStaves(masks.staff);
+
       setStatus(null);
-      setResult({ image, masks });
+      setResult({ image, masks, staves });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
       setStatus(null);
@@ -80,7 +90,11 @@ export function App({ backend }: AppProps) {
       {error !== null ? <p class="app__error">Error: {error}</p> : null}
 
       {result !== null ? (
-        <SegmentationView image={result.image} masks={result.masks} />
+        <SegmentationView
+          image={result.image}
+          masks={result.masks}
+          staves={result.staves}
+        />
       ) : null}
     </main>
   );
