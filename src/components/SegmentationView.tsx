@@ -4,13 +4,24 @@ import {
   compositeMasks,
   type OverlayLayer,
 } from "../../lib/segmentation/overlay";
-import type { Mask, RgbaImage, SegmentationMasks } from "../../lib/types";
+import type {
+  Mask,
+  RgbaImage,
+  SegmentationMasks,
+  StaffStructure,
+} from "../../lib/types";
 
 /**
- * Draws the segmentation result: the page with the detected masks overlaid in
- * color, plus a checkbox per layer to toggle each on and off. This is the
- * Phase 1 visual acceptance — proof the UNets ran and located the music.
+ * Draws the recognition result: the page with the detected segmentation masks
+ * overlaid in color and the Phase 2 staff structure (five-line staves and their
+ * bounding boxes) stroked on top, plus a checkbox per layer to toggle each on
+ * and off. This is the visual acceptance for Phases 1–2 — proof the UNets ran,
+ * located the music, and that the staves were recovered from the staff mask.
  */
+
+// Stroke colors for the staff overlay, distinct from the mask hues above.
+const STAFF_BOX_COLOR = "rgba(236, 72, 153, 0.9)";
+const STAFF_LINE_COLOR = "rgba(14, 165, 233, 0.9)";
 
 interface LayerConfig {
   key: keyof SegmentationMasks;
@@ -30,9 +41,14 @@ const LAYERS: LayerConfig[] = [
 interface SegmentationViewProps {
   image: RgbaImage;
   masks: SegmentationMasks;
+  staves: StaffStructure;
 }
 
-export function SegmentationView({ image, masks }: SegmentationViewProps) {
+export function SegmentationView({
+  image,
+  masks,
+  staves,
+}: SegmentationViewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [enabled, setEnabled] = useState<Record<string, boolean>>({
     staff: true,
@@ -41,6 +57,7 @@ export function SegmentationView({ image, masks }: SegmentationViewProps) {
     clefsKeys: false,
     symbols: false,
   });
+  const [showStaves, setShowStaves] = useState(true);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -66,10 +83,18 @@ export function SegmentationView({ image, masks }: SegmentationViewProps) {
     );
     imageData.data.set(composited.data);
     context.putImageData(imageData, 0, 0);
-  }, [image, masks, enabled]);
+
+    if (showStaves) {
+      drawStaves(context, staves);
+    }
+  }, [image, masks, staves, enabled, showStaves]);
 
   return (
     <div class="segmentation-view">
+      <p class="segmentation-view__summary">
+        {staves.staves.length} stave{staves.staves.length === 1 ? "" : "s"}{" "}
+        detected · unit size {staves.unitSize.toFixed(1)} px
+      </p>
       <div class="segmentation-view__legend">
         {LAYERS.map((layer) => (
           <label key={layer.key} class="segmentation-view__toggle">
@@ -89,8 +114,46 @@ export function SegmentationView({ image, masks }: SegmentationViewProps) {
             {layer.label}
           </label>
         ))}
+        <label class="segmentation-view__toggle">
+          <input
+            type="checkbox"
+            checked={showStaves}
+            onChange={(event) => {
+              setShowStaves((event.currentTarget as HTMLInputElement).checked);
+            }}
+          />
+          <span
+            class="segmentation-view__swatch"
+            style={`background:${STAFF_BOX_COLOR}`}
+          />
+          Staves
+        </label>
       </div>
       <canvas ref={canvasRef} class="segmentation-view__canvas" />
     </div>
   );
+}
+
+/** Stroke each detected staff's bounding box and its five stafflines. */
+function drawStaves(
+  context: CanvasRenderingContext2D,
+  staves: StaffStructure,
+): void {
+  context.lineWidth = 1;
+  for (const staff of staves.staves) {
+    const top = staff.lines[0];
+    const bottom = staff.lines[staff.lines.length - 1];
+
+    context.strokeStyle = STAFF_BOX_COLOR;
+    context.strokeRect(staff.left, top, staff.right - staff.left, bottom - top);
+
+    context.strokeStyle = STAFF_LINE_COLOR;
+    context.beginPath();
+    for (const line of staff.lines) {
+      // Offset by half a pixel so the 1px stroke lands on the pixel row.
+      context.moveTo(staff.left, line + 0.5);
+      context.lineTo(staff.right, line + 0.5);
+    }
+    context.stroke();
+  }
 }

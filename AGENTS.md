@@ -14,12 +14,14 @@ staff (reached in phases, monophonic single staff first).
 Design and full build plan live in `PLAN.md`. This file covers how to work in
 the repo (tooling, conventions). Keep it current when the workflow changes.
 
-## What exists now (Phases 0–1)
+## What exists now (Phases 0–2)
 
 Phase 0 is the toolchain scaffold (see `PLAN.md` §6): `bun build` bundles ORT
 Web's threaded WASM and the page is cross-origin isolated. Phase 1 adds
 segmentation — the two oemer UNets running in the browser with their masks
-overlaid on the page (`PLAN.md` §7).
+overlaid on the page (`PLAN.md` §7). Phase 2 adds staff-structure detection —
+recovering five-line staves and the unit size from the staff mask and drawing
+them on the page.
 
 Phase 0 foundation:
 
@@ -59,6 +61,39 @@ Phase 1 segmentation (all of `lib/` is runtime-agnostic and unit-tested):
   PDF first page via pdf.js).
 - `src/App.tsx` + `src/components/` — drop a score, run segmentation, overlay the
   masks with per-layer toggles.
+
+Phase 2 staff structure (pure algorithm in `lib/staves/`, fully unit-tested):
+
+- `lib/types.ts` — adds `Staff` (five staffline row centers, `unitSize`,
+  `left`/`right` extent) and `StaffStructure` (staves + page-level `unitSize`).
+- `lib/staves/staffline-detection.ts` — horizontal projection of the staff mask,
+  thresholded and grouped into runs → one sub-pixel `StafflineRow` per line.
+- `lib/staves/unit-size.ts` — `estimateUnitSize` (median consecutive gap; the
+  many within-staff gaps outvote the few between-staff ones) plus a `median`
+  helper.
+- `lib/staves/detect-staves.ts` — orchestrates the two above: estimate the unit
+  size, cut the lines into five-line staves (new staff at a large gap or every
+  fifth line), drop non-five-line groups, and measure each staff's horizontal
+  extent from a vertical projection over its own row band.
+- `src/components/SegmentationView.tsx` strokes each detected staff's bounding
+  box and five lines over the canvas (toggleable) and reports the staff count +
+  unit size.
+
+Worker (responsiveness — model loading + inference + staff detection run off
+the main thread so the long WASM pass never freezes the UI):
+
+- `src/worker/omr.worker.ts` — owns the inference backend and model weights;
+  per request it runs `segment` then `detectStaves`, streaming phase/fraction
+  progress and posting the masks (buffers transferred) + staff structure back.
+  Reports its provider on startup so the UI can show it before any file drop.
+- `src/worker/omr-client.ts` — main-thread handle that starts the worker, waits
+  for the provider, and exposes `process(image, onProgress)`.
+- `src/worker/protocol.ts` — the typed message protocol shared by both sides.
+- `src/main.tsx` starts the client (gated on cross-origin isolation) and mounts
+  `App` once the provider is known; `src/App.tsx` decodes the file on the main
+  thread (pdf.js / canvas are DOM-bound), then hands the raster to the client.
+- `scripts/build.ts` bundles the worker as a second entry point to
+  `dist/omr.worker.js` (flattened naming), loaded via `new Worker(...)`.
 
 The model weights (~109 MB, oemer's MIT release) are **not** committed. Run
 `make models` to download them into `public/models/` (gitignored) before

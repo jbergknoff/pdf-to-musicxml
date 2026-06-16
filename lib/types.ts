@@ -51,6 +51,29 @@ export interface SegmentationMasks {
 }
 
 /**
+ * One detected five-line staff. `lines` holds the row centers of its five
+ * stafflines (top to bottom, fractional pixels); `unitSize` is this staff's
+ * interline spacing (the scale reference everything downstream measures
+ * against); `left`/`right` bound the stafflines horizontally (inclusive pixel
+ * columns). The vertical extent is simply `lines[0]` to `lines[4]`.
+ */
+export interface Staff {
+  lines: number[];
+  unitSize: number;
+  left: number;
+  right: number;
+}
+
+/**
+ * The staff layout detected on one page: the staves ordered top to bottom and a
+ * representative interline spacing for the page (the median over the staves).
+ */
+export interface StaffStructure {
+  staves: Staff[];
+  unitSize: number;
+}
+
+/**
  * The fixed properties of an oemer segmentation model needed to drive tiled
  * inference. The models take square `windowSize`×`windowSize` uint8 RGB patches
  * (channel-last) and emit a `channels`-way softmax at the same resolution.

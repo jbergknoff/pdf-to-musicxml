@@ -1,20 +1,27 @@
 /**
  * Builds the SPA into dist/.
  *
- * Bundles the app with `bun build`, then stages the runtime assets that are
- * fetched (not inlined) at run time:
+ * Bundles the app and the OMR worker with `bun build`, then stages the runtime
+ * assets that are fetched (not inlined) at run time:
  *   - ORT Web's `.wasm` / threaded `.mjs` under dist/ort/ (ORT points at /ort/).
  *   - pdf.js's worker bundle at the site root (decode.ts points at it).
  *   - anything under public/ (e.g. public/models/*.onnx) copied as-is, so the
  *     large model weights are served same-origin (required under COEP).
+ *
+ * The worker is a separate entry point so it bundles into its own
+ * dist/omr.worker.js, loaded by omr-client.ts via `new Worker("/omr.worker.js")`.
  */
 import { cp, mkdir, readdir, stat } from "node:fs/promises";
 
 await Bun.build({
-  entrypoints: ["src/main.tsx"],
+  entrypoints: ["src/main.tsx", "src/worker/omr.worker.ts"],
   outdir: "dist",
   target: "browser",
   minify: true,
+  // Flatten both entries to the dist root (main.js, omr.worker.js) rather than
+  // mirroring their src/ paths, so index.html and omr-client.ts can reference
+  // them at the site root.
+  naming: { entry: "[name].[ext]" },
 });
 
 const ortSource = "node_modules/onnxruntime-web/dist";
