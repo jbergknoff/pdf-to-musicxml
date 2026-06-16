@@ -32,6 +32,8 @@ export interface RunSegmentationOptions {
   batchSize?: number;
   /** Reports tiling progress as a fraction in [0, 1] after each batch. */
   onProgress?: (fraction: number) => void;
+  /** Label for the perf log line, so the two models can be told apart. */
+  label?: string;
 }
 
 // Segmentation is overhead-bound (many small tiles), so larger batches amortize
@@ -61,6 +63,14 @@ export async function runSegmentationModel(
   );
   const patchVolume = windowSize * windowSize;
 
+  // Logged up front (not just on completion) so a mid-run crash still leaves a
+  // breadcrumb showing which model and how many tiles were in flight.
+  const label = options.label ?? "model";
+  console.info(
+    `[omr] ${label}: ${tiles.length} tiles (window ${windowSize}, step ${stepSize}, batch ${batchSize})`,
+  );
+  const modelStart = performance.now();
+
   for (let start = 0; start < tiles.length; start += batchSize) {
     const batch = tiles.slice(start, start + batchSize);
     const input = packBatch(image, batch, windowSize);
@@ -84,6 +94,12 @@ export async function runSegmentationModel(
       Math.min(start + batch.length, tiles.length) / tiles.length,
     );
   }
+
+  const elapsedMs = performance.now() - modelStart;
+  console.info(
+    `[omr] ${label}: ${Math.round(elapsedMs)}ms ` +
+      `(${(elapsedMs / tiles.length).toFixed(1)}ms/tile)`,
+  );
 
   return finalizeProbabilityMap(accumulator);
 }

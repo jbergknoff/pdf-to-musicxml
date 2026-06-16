@@ -29,7 +29,10 @@ export const STAFF_SYMBOL_MODEL_SPEC: SegmentationModelSpec = {
   inputName: "input",
   outputName: "prediction",
   windowSize: 256,
-  stepSize: 128,
+  // 75% stride (vs oemer's 50%): drops per-pixel coverage from ~4x to ~1.8x,
+  // roughly halving tile count, at the cost of a little seam overlap. The
+  // averaging accumulator still smooths the remaining seams.
+  stepSize: 192,
   channels: 3,
 };
 
@@ -40,7 +43,8 @@ export const SYMBOL_DETAIL_MODEL_SPEC: SegmentationModelSpec = {
   inputName: "input",
   outputName: "conv2d_25",
   windowSize: 288,
-  stepSize: 128,
+  // 75% stride, matching STAFF_SYMBOL_MODEL_SPEC (see note there).
+  stepSize: 216,
   channels: 4,
 };
 
@@ -90,10 +94,12 @@ export async function segment(
   // The two models run sequentially; weight their progress evenly.
   const staffSymbolOptions: RunSegmentationOptions = {
     batchSize: options.batchSize,
+    label: "staff/symbol model",
     onProgress: (fraction) => options.onProgress?.(fraction * 0.5),
   };
   const symbolDetailOptions: RunSegmentationOptions = {
     batchSize: options.batchSize,
+    label: "symbol-detail model",
     onProgress: (fraction) => options.onProgress?.(0.5 + fraction * 0.5),
   };
 
