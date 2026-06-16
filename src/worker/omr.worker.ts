@@ -35,6 +35,11 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+// Small enough that the 288² model's per-run conv intermediates stay within
+// ORT-wasm's 32-bit byte-size limits (batch 16 overflowed); large enough to
+// still amortize a little per-call overhead.
+const WASM_BATCH_SIZE = 4;
+
 // The backend and models are resolved once and reused across requests.
 let backendPromise: Promise<InferenceBackend> | null = null;
 let modelsPromise: Promise<SegmentationModels> | null = null;
@@ -74,11 +79,18 @@ async function process(requestId: number, image: WorkerInbound["image"]) {
   const backend = await getBackend();
   const models = await getModels(backend, requestId);
 
+  // ORT's wasm build is 32-bit: at the default batch the 288² model's conv
+  // intermediates overflow int byte-size math inside OrtRun (SafeInt aborts).
+  // Batching buys nothing on wasm anyway — it's compute-bound, not dispatch-
+  // bound like WebGPU — so use a small batch there to keep buffers in range.
+  const batchSize = backend.provider === "wasm" ? WASM_BATCH_SIZE : undefined;
+
   // Lightweight perf instrumentation: the segmentation pass is the dominant
   // cost, so log the page size, provider, and wall-clock per phase to find the
   // bottleneck without a profiler.
   const segmentStart = performance.now();
   const masks = await segment(image, models, {
+    batchSize,
     onProgress: (fraction) => {
       post({ type: "progress", requestId, phase: "segmenting", fraction });
     },
