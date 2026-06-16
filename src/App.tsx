@@ -42,6 +42,11 @@ export function App({ backend }: AppProps) {
         onAssetLoading: (entry) => setStatus(`Loading ${entry.fileName}…`),
       });
 
+      // On the WASM backend segmentation runs hundreds of tiles on the CPU and
+      // can take a while; show the stage up front so it doesn't look stuck, then
+      // stream per-batch progress.
+      const slow = backend.provider !== "webgpu";
+      setStatus(`Segmenting…${slow ? " (this can take a minute on CPU)" : ""}`);
       const masks = await segment(image, models, {
         onProgress: (fraction) =>
           setStatus(`Segmenting… ${Math.round(fraction * 100)}%`),

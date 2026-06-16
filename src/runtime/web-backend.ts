@@ -25,17 +25,45 @@ function fromOrtTensor(value: ort.Tensor): Tensor {
 }
 
 /**
- * Browser inference backend. Prefers WebGPU when available, falling back to the
- * threaded WASM backend. The page must be cross-origin isolated for the WASM
- * threads to work (see scripts/serve.ts / netlify.toml).
+ * Probe for a genuinely usable WebGPU adapter. `"gpu" in navigator` only means
+ * the API exists; on many machines/browsers `requestAdapter()` still returns
+ * null (or throws), and requesting the WebGPU execution provider in that state
+ * makes ORT log a "Failed to get GPU adapter" error and, worse, can hang a
+ * second session. So we only use WebGPU when an adapter actually resolves.
+ */
+interface GpuLike {
+  requestAdapter(): Promise<unknown>;
+}
+
+async function hasWebGpuAdapter(): Promise<boolean> {
+  const gpu = (navigator as { gpu?: GpuLike }).gpu;
+  if (gpu === undefined) {
+    return false;
+  }
+  try {
+    const adapter = await gpu.requestAdapter();
+    return adapter != null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Browser inference backend. Uses WebGPU when a working adapter is available,
+ * otherwise the threaded WASM backend. The page must be cross-origin isolated
+ * for the WASM threads to work (see scripts/serve.ts / netlify.toml).
  */
 export async function createWebBackend(): Promise<InferenceBackend> {
-  const provider = "gpu" in navigator ? "webgpu" : "wasm";
+  const provider = (await hasWebGpuAdapter()) ? "webgpu" : "wasm";
+  // Only list WebGPU when we confirmed it works; otherwise ORT would try (and
+  // noisily fail) the WebGPU EP before falling back.
+  const executionProviders =
+    provider === "webgpu" ? ["webgpu", "wasm"] : ["wasm"];
   return {
     provider,
     async createSession(modelBytes) {
       const session = await ort.InferenceSession.create(modelBytes, {
-        executionProviders: [provider, "wasm"],
+        executionProviders,
       });
       return {
         async run(feeds) {
