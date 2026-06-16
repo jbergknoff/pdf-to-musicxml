@@ -34,7 +34,10 @@ export interface RunSegmentationOptions {
   onProgress?: (fraction: number) => void;
 }
 
-const DEFAULT_BATCH_SIZE = 4;
+// Segmentation is overhead-bound (many small tiles), so larger batches amortize
+// per-call cost — critical on WebGPU, where each `session.run` pays CPU<->GPU
+// dispatch and sync. 16 was a good balance of throughput vs. memory in practice.
+const DEFAULT_BATCH_SIZE = 16;
 
 /**
  * Run `model` over `image`, returning the averaged per-pixel class

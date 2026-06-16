@@ -74,14 +74,25 @@ async function process(requestId: number, image: WorkerInbound["image"]) {
   const backend = await getBackend();
   const models = await getModels(backend, requestId);
 
+  // Lightweight perf instrumentation: the segmentation pass is the dominant
+  // cost, so log the page size, provider, and wall-clock per phase to find the
+  // bottleneck without a profiler.
+  const segmentStart = performance.now();
   const masks = await segment(image, models, {
     onProgress: (fraction) => {
       post({ type: "progress", requestId, phase: "segmenting", fraction });
     },
   });
+  const segmentMs = performance.now() - segmentStart;
 
   post({ type: "progress", requestId, phase: "detecting-staves", fraction: 1 });
+  const stavesStart = performance.now();
   const staves = detectStaves(masks.staff);
+  console.info(
+    `[omr] ${image.width}x${image.height} via ${backend.provider}: ` +
+      `segment ${Math.round(segmentMs)}ms, ` +
+      `detect-staves ${Math.round(performance.now() - stavesStart)}ms`,
+  );
 
   // Transfer the mask buffers (~4 MB each) rather than copying them back.
   post({ type: "result", requestId, masks, staves }, [

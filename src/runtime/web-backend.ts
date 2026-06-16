@@ -9,6 +9,14 @@ import type {
 // scripts/build.ts, which copies them there, and scripts/serve.ts).
 ort.env.wasm.wasmPaths = "/ort/";
 
+// Use every available core for the threaded WASM backend. ORT's default can be
+// conservative (especially inside a worker), and segmentation is dominated by
+// many small inferences, so more threads is a near-linear win on the CPU path.
+// The page must be cross-origin isolated for WASM threads to spin up at all.
+if (typeof navigator !== "undefined" && navigator.hardwareConcurrency) {
+  ort.env.wasm.numThreads = navigator.hardwareConcurrency;
+}
+
 function toOrtTensor(tensor: Tensor): ort.Tensor {
   if (tensor.type === "uint8") {
     return new ort.Tensor("uint8", tensor.data as Uint8Array, tensor.dims);
@@ -55,6 +63,9 @@ async function hasWebGpuAdapter(): Promise<boolean> {
  */
 export async function createWebBackend(): Promise<InferenceBackend> {
   const provider = (await hasWebGpuAdapter()) ? "webgpu" : "wasm";
+  console.info(
+    `[omr] inference provider: ${provider}, wasm threads: ${ort.env.wasm.numThreads}`,
+  );
   // Only list WebGPU when we confirmed it works; otherwise ORT would try (and
   // noisily fail) the WebGPU EP before falling back.
   const executionProviders =
