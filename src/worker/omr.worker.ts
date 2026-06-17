@@ -55,10 +55,11 @@ const WASM_BATCH_SIZE = 4;
 // GPU process and take the whole browser down with it (observed: a ~30s grind,
 // then a full Chrome crash, once inference reaches the heavier 2nd model). This
 // is a device-level failure, not a JS exception, so it can't be caught and
-// recovered from — it can only be avoided by keeping each dispatch small. A
-// modest batch still amortizes the CPU<->GPU dispatch overhead that batching on
-// WebGPU is meant to hide.
-const WEBGPU_BATCH_SIZE = 4;
+// recovered from — it can only be avoided by keeping each dispatch small. Batch
+// 4 was stable but very slow (~3.7 min/page); 8 trades toward throughput while
+// staying well under the 16 that crashed. Raise further only with care — the
+// downside of overshooting is a browser crash, not a catchable error.
+const WEBGPU_BATCH_SIZE = 8;
 
 // The backend and models are resolved once and reused across requests.
 let backendPromise: Promise<InferenceBackend> | null = null;
