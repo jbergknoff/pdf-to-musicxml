@@ -40,6 +40,17 @@ function messageOf(error: unknown): string {
 // still amortize a little per-call overhead.
 const WASM_BATCH_SIZE = 4;
 
+// WebGPU needs its own cap. At batch 16 the 288² model issues a single conv
+// dispatch large enough to either exceed the GPU's max buffer/binding size or
+// run long enough to trip the driver's watchdog (TDR) — both of which kill the
+// GPU process and take the whole browser down with it (observed: a ~30s grind,
+// then a full Chrome crash, once inference reaches the heavier 2nd model). This
+// is a device-level failure, not a JS exception, so it can't be caught and
+// recovered from — it can only be avoided by keeping each dispatch small. A
+// modest batch still amortizes the CPU<->GPU dispatch overhead that batching on
+// WebGPU is meant to hide.
+const WEBGPU_BATCH_SIZE = 4;
+
 // The backend and models are resolved once and reused across requests.
 let backendPromise: Promise<InferenceBackend> | null = null;
 let modelsPromise: Promise<SegmentationModels> | null = null;
@@ -79,11 +90,12 @@ async function process(requestId: number, image: WorkerInbound["image"]) {
   const backend = await getBackend();
   const models = await getModels(backend, requestId);
 
-  // ORT's wasm build is 32-bit: at the default batch the 288² model's conv
-  // intermediates overflow int byte-size math inside OrtRun (SafeInt aborts).
-  // Batching buys nothing on wasm anyway — it's compute-bound, not dispatch-
-  // bound like WebGPU — so use a small batch there to keep buffers in range.
-  const batchSize = backend.provider === "wasm" ? WASM_BATCH_SIZE : undefined;
+  // Both backends need a bounded batch, for different reasons (see the two
+  // constants): ORT-wasm is 32-bit and overflows OrtRun's byte-size math at the
+  // default batch, while WebGPU crashes the GPU process on an oversized single
+  // dispatch. Neither benefits enough from large batches to justify the risk.
+  const batchSize =
+    backend.provider === "wasm" ? WASM_BATCH_SIZE : WEBGPU_BATCH_SIZE;
 
   // Lightweight perf instrumentation: the segmentation pass is the dominant
   // cost, so log the page size, provider, and wall-clock per phase to find the

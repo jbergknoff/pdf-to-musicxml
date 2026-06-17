@@ -38,8 +38,10 @@ export interface RunSegmentationOptions {
 }
 
 // Segmentation is overhead-bound (many small tiles), so larger batches amortize
-// per-call cost — critical on WebGPU, where each `session.run` pays CPU<->GPU
-// dispatch and sync. 16 was a good balance of throughput vs. memory in practice.
+// per-call cost. This library default is deliberately middling; callers pick a
+// provider-specific size, because both backends have hard upper bounds — ORT-
+// wasm overflows 32-bit byte-size math and WebGPU crashes the GPU process on an
+// oversized dispatch (see the worker's WASM_BATCH_SIZE / WEBGPU_BATCH_SIZE).
 const DEFAULT_BATCH_SIZE = 16;
 
 // A tile whose every pixel is lighter than this (Rec. 601 luma, 0–255) holds no
