@@ -6,6 +6,7 @@ import {
 import { detectStaves } from "../../lib/staves/detect-staves";
 import { loadSegmentationModels } from "../models/registry";
 import { createWebBackend } from "../runtime/web-backend";
+import { flushWebGpuProfile } from "../runtime/webgpu-profile";
 import type {
   OmrConfig,
   ProcessRequest,
@@ -127,6 +128,15 @@ async function process(
     },
   });
   const segmentMs = performance.now() - segmentStart;
+
+  // With profiling on, dump the aggregated per-op GPU time for the whole
+  // segmentation pass (both models) — the ranked table that points at the slow
+  // ops behind the ~920ms/tile. No-op on wasm (no WebGPU kernels fire).
+  if (config.profiling) {
+    flushWebGpuProfile(
+      `${image.width}x${image.height} via ${backend.provider}`,
+    );
+  }
 
   post({ type: "progress", requestId, phase: "detecting-staves", fraction: 1 });
   const stavesStart = performance.now();

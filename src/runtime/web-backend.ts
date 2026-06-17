@@ -4,6 +4,7 @@ import type {
   Tensor,
   TensorDataType,
 } from "../../lib/runtime/inference-backend";
+import { recordWebGpuKernel } from "./webgpu-profile";
 
 // ORT Web fetches its WASM assets at runtime; serve them from /ort/ (see
 // scripts/build.ts, which copies them there, and scripts/serve.ts).
@@ -86,12 +87,26 @@ export async function createWebBackend(
 
   // Off: quiet the per-load "some nodes were not assigned to the preferred EP"
   // notice (benign — shape ops run on CPU) so it doesn't bury our [omr] logs.
-  // On: go verbose, which prints the full node->EP assignment dump, and switch
-  // on WebGPU per-kernel profiling — together they show which ops fell back to
-  // CPU and where the GPU time actually goes.
+  // On: go verbose, which prints the full node->EP assignment dump, and route
+  // WebGPU's per-kernel timings into our aggregator (see webgpu-profile.ts)
+  // instead of ORT's default per-kernel console spam. Together they show which
+  // ops fell back to CPU and where the GPU time actually goes. `ondata` isn't in
+  // ORT's published profiling type yet, hence the structural cast.
   if (profiling) {
     ort.env.logLevel = "verbose";
-    ort.env.webgpu.profiling = { mode: "default" };
+    (
+      ort.env.webgpu as {
+        profiling?: {
+          mode: "default" | "off";
+          ondata?: (data: unknown) => void;
+        };
+      }
+    ).profiling = {
+      mode: "default",
+      ondata: (data) => {
+        recordWebGpuKernel(data as Parameters<typeof recordWebGpuKernel>[0]);
+      },
+    };
   } else {
     ort.env.logLevel = "error";
   }
