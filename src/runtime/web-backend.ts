@@ -4,7 +4,6 @@ import type {
   Tensor,
   TensorDataType,
 } from "../../lib/runtime/inference-backend";
-import { recordWebGpuKernel } from "./webgpu-profile";
 
 // ORT Web fetches its WASM assets at runtime; serve them from /ort/ (see
 // scripts/build.ts, which copies them there, and scripts/serve.ts).
@@ -65,7 +64,9 @@ async function hasWebGpuAdapter(): Promise<boolean> {
  * `forcedProvider` overrides the auto-detection (wired to the UI backend
  * picker) so the two paths can be timed against each other; forcing WebGPU is
  * honored even if the adapter probe is unsure, on purpose. `profiling` turns on
- * ORT's verbose logging + WebGPU per-kernel timings to find the slow ops.
+ * ORT's verbose logging, which dumps the node->EP assignments at load so we can
+ * see which ops fell back to CPU (per-kernel GPU profiling is intentionally not
+ * enabled — its timestamp-queries crash this device; see below).
  */
 export type ForcedProvider = "webgpu" | "wasm";
 
@@ -87,26 +88,16 @@ export async function createWebBackend(
 
   // Off: quiet the per-load "some nodes were not assigned to the preferred EP"
   // notice (benign — shape ops run on CPU) so it doesn't bury our [omr] logs.
-  // On: go verbose, which prints the full node->EP assignment dump, and route
-  // WebGPU's per-kernel timings into our aggregator (see webgpu-profile.ts)
-  // instead of ORT's default per-kernel console spam. Together they show which
-  // ops fell back to CPU and where the GPU time actually goes. `ondata` isn't in
-  // ORT's published profiling type yet, hence the structural cast.
+  // On: go verbose. That prints the full node->execution-provider assignment
+  // dump at session load — the safe, CPU-side diagnostic that shows which ops
+  // the WebGPU EP refused and ran on CPU.
+  //
+  // We deliberately do NOT enable ORT's `webgpu.profiling` (per-kernel GPU
+  // timings): it uses GPU timestamp-queries whose extra per-dispatch work tips
+  // this already-at-the-limit device over the edge and crashes the whole GPU
+  // process (uncatchable), the same failure mode as an oversized batch.
   if (profiling) {
     ort.env.logLevel = "verbose";
-    (
-      ort.env.webgpu as {
-        profiling?: {
-          mode: "default" | "off";
-          ondata?: (data: unknown) => void;
-        };
-      }
-    ).profiling = {
-      mode: "default",
-      ondata: (data) => {
-        recordWebGpuKernel(data as Parameters<typeof recordWebGpuKernel>[0]);
-      },
-    };
   } else {
     ort.env.logLevel = "error";
   }

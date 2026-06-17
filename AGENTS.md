@@ -98,9 +98,10 @@ the main thread so the long WASM pass never freezes the UI):
   Because the backend/profiling can only be set before a session is built,
   changing either recreates the worker — `src/main.tsx`'s `Root` owns the
   `OmrConfig` and the client lifecycle, disposing and recreating the client when
-  the config changes. Profiling flips ORT to verbose logging (which dumps the
-  node->EP assignments) and turns on WebGPU per-kernel timings, for chasing the
-  segmentation bottleneck.
+  the config changes. Profiling flips ORT to verbose logging, which dumps the
+  node->EP assignments at session load (the safe, CPU-side view of which ops
+  fell back to CPU). ORT's WebGPU per-kernel profiling is intentionally left off
+  — its GPU timestamp-queries crash this already-at-the-limit device.
 - `src/main.tsx` mounts `Root` (gated on cross-origin isolation); `src/App.tsx`
   decodes the file on the main thread (pdf.js / canvas are DOM-bound), then
   hands the raster to the client (null while a fresh worker spins up).
