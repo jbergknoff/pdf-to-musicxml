@@ -79,20 +79,35 @@ Phase 2 staff structure (pure algorithm in `lib/staves/`, fully unit-tested):
   box and five lines over the canvas (toggleable) and reports the staff count +
   unit size.
 
-Worker (responsiveness — model loading + inference + staff detection run off
-the main thread so the long WASM pass never freezes the UI):
+Worker (responsiveness + parallelism — model loading + inference + staff
+detection run off the main thread so the long pass never freezes the UI, and
+the two independent models run concurrently):
 
-- `src/worker/omr.worker.ts` — owns the inference backend and model weights. It
-  waits for a `config` message (backend choice + profiling) before resolving its
-  inference provider, then per request runs `segment` then `detectStaves`,
-  streaming phase/fraction progress and posting the masks (buffers transferred)
-  + staff structure back. Reports its provider after config so the UI can show
-  it before any file drop.
-- `src/worker/omr-client.ts` — main-thread handle that starts the worker, sends
-  the `OmrConfig`, waits for the provider, and exposes `process(image,
-  onProgress)` plus `dispose()`.
+- The two segmentation models are independent (their masks never interact), so
+  each runs in its **own worker** — its own ORT instance and WebGPU device.
+  ORT-web can't run two sessions on one device at once, so separate workers is
+  how the models actually overlap: each model's GPU pass runs while the other's
+  CPU-side tiling/readback runs. `lib/segmentation/segment.ts` exposes the two
+  per-model passes (`segmentStaffSymbol` → staff/symbols masks, plus the staff
+  structure via `detectStaves`; `segmentSymbolDetail` → stems-rests/noteheads/
+  clefs-keys masks); `segment` still composes both sequentially for tests.
+- `src/worker/omr.worker.ts` — owns one model (its `role`), the inference
+  backend, and that model's segmentation pass. Waits for a `config` message
+  (backend choice + `role` + `wasmThreads`) before resolving its provider, then
+  per request runs its model (the `staffSymbol` worker also runs `detectStaves`),
+  streaming progress and posting its partial masks (buffers transferred) back.
+  Loads only its own model's weights via `loadStaffSymbolModel` /
+  `loadSymbolDetailModel`.
+- `src/worker/omr-client.ts` — main-thread handle that starts **both** workers,
+  sends each its `OmrConfig` + role, waits for both providers, and exposes
+  `process(image, onProgress)` plus `dispose()`. Fans each page out to both
+  workers (one structured-clone copy each), averages their progress into one
+  bar, and merges the two partial results into the full `SegmentationMasks` +
+  staff structure. Splits the WASM thread pool in half per worker so the two
+  don't oversubscribe the CPU (no effect on the WebGPU path).
 - `src/worker/protocol.ts` — the typed message protocol shared by both sides,
-  including `OmrConfig` (`backend`: auto/webgpu/wasm).
+  including `OmrConfig` (`backend`: auto/webgpu/wasm), the `WorkerRole`, and the
+  role-discriminated result messages.
 - Inference options are UI-controlled, not URL flags: `src/components/
   InferenceSettings.tsx` is the backend picker in the header. Because the
   backend can only be set before a session is built, changing it recreates the

@@ -69,12 +69,20 @@ export type ForcedProvider = "webgpu" | "wasm";
 
 export interface WebBackendOptions {
   forcedProvider?: ForcedProvider;
+  /**
+   * Override the WASM thread count (default: all cores). Used to split the CPU
+   * across the two model workers so they don't oversubscribe it.
+   */
+  wasmThreads?: number;
 }
 
 export async function createWebBackend(
   options: WebBackendOptions = {},
 ): Promise<InferenceBackend> {
-  const { forcedProvider } = options;
+  const { forcedProvider, wasmThreads } = options;
+  if (wasmThreads !== undefined && wasmThreads > 0) {
+    ort.env.wasm.numThreads = wasmThreads;
+  }
   let provider: ForcedProvider;
   if (forcedProvider !== undefined) {
     provider = forcedProvider;

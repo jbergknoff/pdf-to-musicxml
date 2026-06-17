@@ -1,8 +1,4 @@
-import type {
-  RgbaImage,
-  SegmentationMasks,
-  StaffStructure,
-} from "../../lib/types";
+import type { Mask, RgbaImage, StaffStructure } from "../../lib/types";
 
 /**
  * Message protocol between the main thread and the OMR worker
@@ -28,26 +24,58 @@ export interface ProgressUpdate {
   detail?: string;
 }
 
+/**
+ * Which model a worker owns. The two segmentation models are independent, so
+ * each runs in its own worker (its own ORT instance / WebGPU device) and the
+ * main thread merges their masks — ORT-web can't run two sessions concurrently
+ * on one device, so separate workers is how the models actually overlap.
+ */
+export type WorkerRole = "staffSymbol" | "symbolDetail";
+
 /** Posted once, after the worker resolves its inference backend. */
 export interface ReadyMessage {
   type: "ready";
+  role: WorkerRole;
   provider: string;
 }
 
 export interface ProgressMessage extends ProgressUpdate {
   type: "progress";
+  role: WorkerRole;
   requestId: number;
 }
 
-export interface ResultMessage {
+/** The `unet_big` worker's masks plus the staff structure it derived. */
+export interface StaffSymbolResultMessage {
   type: "result";
+  role: "staffSymbol";
   requestId: number;
-  masks: SegmentationMasks;
+  width: number;
+  height: number;
+  staff: Mask;
+  symbols: Mask;
   staves: StaffStructure;
 }
 
+/** The `seg_net` worker's three symbol-class masks. */
+export interface SymbolDetailResultMessage {
+  type: "result";
+  role: "symbolDetail";
+  requestId: number;
+  width: number;
+  height: number;
+  stemsRests: Mask;
+  noteheads: Mask;
+  clefsKeys: Mask;
+}
+
+export type ResultMessage =
+  | StaffSymbolResultMessage
+  | SymbolDetailResultMessage;
+
 export interface ErrorMessage {
   type: "error";
+  role: WorkerRole;
   requestId: number;
   message: string;
 }
@@ -78,9 +106,15 @@ export interface OmrConfig {
  * Sent once, right after the worker starts, to configure the backend. The
  * worker defers resolving its inference provider until this arrives, so the UI
  * can pick the backend; changing it later recreates the worker.
+ *
+ * `role` assigns the worker its model. `wasmThreads` caps the worker's WASM
+ * thread pool: with two workers sharing one CPU, each takes half the cores so
+ * the threaded WASM path doesn't oversubscribe (ignored on the WebGPU path).
  */
 export interface ConfigRequest extends OmrConfig {
   type: "config";
+  role: WorkerRole;
+  wasmThreads?: number;
 }
 
 /** Everything the main thread sends to the worker. */

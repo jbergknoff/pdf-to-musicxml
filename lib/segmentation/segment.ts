@@ -1,14 +1,11 @@
 import type {
+  Mask,
   RgbaImage,
   SegmentationMasks,
   SegmentationModelSpec,
 } from "../types";
 import { argmaxClassMap, classMask } from "./masks";
-import {
-  type RunSegmentationOptions,
-  runSegmentationModel,
-  type SegmentationModel,
-} from "./unet-session";
+import { runSegmentationModel, type SegmentationModel } from "./unet-session";
 
 /**
  * Phase 1 segmentation: run both oemer models over one preprocessed page and
@@ -83,71 +80,98 @@ export function createSegmentationModels(
   };
 }
 
+/** The `unet_big` masks: where the music is, split staff vs. everything-else. */
+export interface StaffSymbolMasks {
+  width: number;
+  height: number;
+  staff: Mask;
+  symbols: Mask;
+}
+
+/** The `seg_net` masks: the symbolic layer broken into its three classes. */
+export interface SymbolDetailMasks {
+  width: number;
+  height: number;
+  stemsRests: Mask;
+  noteheads: Mask;
+  clefsKeys: Mask;
+}
+
+/**
+ * Run only the `unet_big` model and reduce it to its two masks. Split out from
+ * {@link segment} so the two independent models can run in separate workers
+ * (their masks don't interact), then be merged on the main thread.
+ */
+export async function segmentStaffSymbol(
+  image: RgbaImage,
+  model: SegmentationModel,
+  options: SegmentOptions = {},
+): Promise<StaffSymbolMasks> {
+  const { width, height } = image;
+  const probabilities = await runSegmentationModel(image, model, {
+    batchSize: options.batchSize,
+    label: "staff/symbol model",
+    onProgress: options.onProgress,
+  });
+  const classes = argmaxClassMap(probabilities);
+  return {
+    width,
+    height,
+    staff: classMask(classes, width, height, STAFF_SYMBOL_CLASS.staff),
+    symbols: classMask(classes, width, height, STAFF_SYMBOL_CLASS.symbols),
+  };
+}
+
+/** Run only the `seg_net` model and reduce it to its three masks. */
+export async function segmentSymbolDetail(
+  image: RgbaImage,
+  model: SegmentationModel,
+  options: SegmentOptions = {},
+): Promise<SymbolDetailMasks> {
+  const { width, height } = image;
+  const probabilities = await runSegmentationModel(image, model, {
+    batchSize: options.batchSize,
+    label: "symbol-detail model",
+    onProgress: options.onProgress,
+  });
+  const classes = argmaxClassMap(probabilities);
+  return {
+    width,
+    height,
+    stemsRests: classMask(
+      classes,
+      width,
+      height,
+      SYMBOL_DETAIL_CLASS.stemsRests,
+    ),
+    noteheads: classMask(classes, width, height, SYMBOL_DETAIL_CLASS.noteheads),
+    clefsKeys: classMask(classes, width, height, SYMBOL_DETAIL_CLASS.clefsKeys),
+  };
+}
+
 export async function segment(
   image: RgbaImage,
   models: SegmentationModels,
   options: SegmentOptions = {},
 ): Promise<SegmentationMasks> {
-  const { width, height } = image;
-
-  // The two models run sequentially; weight their progress evenly.
-  const staffSymbolOptions: RunSegmentationOptions = {
+  // Sequential composition of the two per-model passes, weighting their progress
+  // evenly. The worker pipeline runs the same two passes concurrently instead.
+  const staffSymbol = await segmentStaffSymbol(image, models.staffSymbol, {
     batchSize: options.batchSize,
-    label: "staff/symbol model",
     onProgress: (fraction) => options.onProgress?.(fraction * 0.5),
-  };
-  const symbolDetailOptions: RunSegmentationOptions = {
+  });
+  const symbolDetail = await segmentSymbolDetail(image, models.symbolDetail, {
     batchSize: options.batchSize,
-    label: "symbol-detail model",
     onProgress: (fraction) => options.onProgress?.(0.5 + fraction * 0.5),
-  };
-
-  const staffSymbolProbabilities = await runSegmentationModel(
-    image,
-    models.staffSymbol,
-    staffSymbolOptions,
-  );
-  const staffSymbolClasses = argmaxClassMap(staffSymbolProbabilities);
-
-  const symbolDetailProbabilities = await runSegmentationModel(
-    image,
-    models.symbolDetail,
-    symbolDetailOptions,
-  );
-  const symbolDetailClasses = argmaxClassMap(symbolDetailProbabilities);
+  });
 
   return {
-    width,
-    height,
-    staff: classMask(
-      staffSymbolClasses,
-      width,
-      height,
-      STAFF_SYMBOL_CLASS.staff,
-    ),
-    symbols: classMask(
-      staffSymbolClasses,
-      width,
-      height,
-      STAFF_SYMBOL_CLASS.symbols,
-    ),
-    stemsRests: classMask(
-      symbolDetailClasses,
-      width,
-      height,
-      SYMBOL_DETAIL_CLASS.stemsRests,
-    ),
-    noteheads: classMask(
-      symbolDetailClasses,
-      width,
-      height,
-      SYMBOL_DETAIL_CLASS.noteheads,
-    ),
-    clefsKeys: classMask(
-      symbolDetailClasses,
-      width,
-      height,
-      SYMBOL_DETAIL_CLASS.clefsKeys,
-    ),
+    width: image.width,
+    height: image.height,
+    staff: staffSymbol.staff,
+    symbols: staffSymbol.symbols,
+    stemsRests: symbolDetail.stemsRests,
+    noteheads: symbolDetail.noteheads,
+    clefsKeys: symbolDetail.clefsKeys,
   };
 }

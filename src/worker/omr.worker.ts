@@ -1,25 +1,31 @@
 import { MODEL_MANIFEST } from "../../lib/models/manifest";
 import type { InferenceBackend } from "../../lib/runtime/inference-backend";
 import {
-  type SegmentationModels,
-  segment,
+  segmentStaffSymbol,
+  segmentSymbolDetail,
 } from "../../lib/segmentation/segment";
+import type { SegmentationModel } from "../../lib/segmentation/unet-session";
 import { detectStaves } from "../../lib/staves/detect-staves";
-import { loadSegmentationModels } from "../models/registry";
+import {
+  loadStaffSymbolModel,
+  loadSymbolDetailModel,
+} from "../models/registry";
 import { createWebBackend } from "../runtime/web-backend";
 import type {
-  OmrConfig,
+  ConfigRequest,
   ProcessRequest,
   WorkerInbound,
   WorkerOutbound,
+  WorkerRole,
 } from "./protocol";
 
 /**
- * OMR worker: owns the inference backend, the model weights, and the heavy
- * segmentation + staff-detection pass so they run off the main thread. It
- * reports its provider as soon as the backend resolves (before any file is
- * dropped), then processes one decoded page per `process` request, streaming
- * progress and posting the masks + staff structure back.
+ * OMR worker: owns one segmentation model (its `role`), the inference backend,
+ * and the heavy segmentation pass for that model, so it runs off the main
+ * thread. The two models run in two of these workers concurrently — separate
+ * ORT instances / WebGPU devices — because ORT-web can't run two sessions on one
+ * device at once. The `staffSymbol` worker also derives the staff structure (it
+ * owns the staff mask); the main thread merges both workers' masks.
  */
 
 // The dedicated-worker globals aren't in this project's TS lib set; describe
@@ -52,31 +58,38 @@ function messageOf(error: unknown): string {
 // removing the per-tile GPU<->CPU syncs is what this optimization targets.
 const FIXED_BATCH_SIZE = MODEL_MANIFEST.staffSymbol.inputShape[0];
 
-// The backend and models are resolved once (after the config message arrives)
-// and reused across requests. Changing the config recreates the whole worker,
-// so it's resolved here exactly once per worker lifetime.
+// The config message (which fixes this worker's role + backend) arrives once at
+// startup, before any process request. The backend and model are resolved once
+// and reused across requests; changing the config recreates the worker.
+let config: ConfigRequest | null = null;
 let backendPromise: Promise<InferenceBackend> | null = null;
-let modelsPromise: Promise<SegmentationModels> | null = null;
+let modelPromise: Promise<SegmentationModel> | null = null;
 
-function getBackend(config: OmrConfig): Promise<InferenceBackend> {
+function getBackend(settings: ConfigRequest): Promise<InferenceBackend> {
   if (backendPromise === null) {
     backendPromise = createWebBackend({
-      forcedProvider: config.backend === "auto" ? undefined : config.backend,
+      forcedProvider:
+        settings.backend === "auto" ? undefined : settings.backend,
+      wasmThreads: settings.wasmThreads,
     });
   }
   return backendPromise;
 }
 
-function getModels(
+function getModel(
   backend: InferenceBackend,
+  role: WorkerRole,
   requestId: number,
-): Promise<SegmentationModels> {
-  if (modelsPromise === null) {
+): Promise<SegmentationModel> {
+  if (modelPromise === null) {
+    const load =
+      role === "staffSymbol" ? loadStaffSymbolModel : loadSymbolDetailModel;
     // Reset on failure so a later request can retry the download.
-    modelsPromise = loadSegmentationModels(backend, {
+    modelPromise = load(backend, {
       onAssetLoading: (entry) => {
         post({
           type: "progress",
+          role,
           requestId,
           phase: "loading-models",
           fraction: 0,
@@ -84,68 +97,94 @@ function getModels(
         });
       },
     }).catch((error) => {
-      modelsPromise = null;
+      modelPromise = null;
       throw error;
     });
   }
-  return modelsPromise;
+  return modelPromise;
 }
 
 async function process(
-  config: OmrConfig,
+  settings: ConfigRequest,
   requestId: number,
   image: ProcessRequest["image"],
 ) {
-  const backend = await getBackend(config);
-  const models = await getModels(backend, requestId);
+  const { role } = settings;
+  const backend = await getBackend(settings);
+  const model = await getModel(backend, role, requestId);
 
-  // The optimized weights bake a fixed batch into the graph, so the batch is
-  // dictated by the weights (not the provider): feed exactly FIXED_BATCH_SIZE
-  // tiles per inference.
-  const batchSize = FIXED_BATCH_SIZE;
+  const onProgress = (fraction: number) => {
+    post({ type: "progress", role, requestId, phase: "segmenting", fraction });
+  };
+  const start = performance.now();
 
-  // Lightweight perf instrumentation: the segmentation pass is the dominant
-  // cost, so log the page size, provider, and wall-clock per phase to find the
-  // bottleneck without a profiler.
-  const segmentStart = performance.now();
-  const masks = await segment(image, models, {
-    batchSize,
-    onProgress: (fraction) => {
-      post({ type: "progress", requestId, phase: "segmenting", fraction });
-    },
+  if (role === "staffSymbol") {
+    const masks = await segmentStaffSymbol(image, model, {
+      batchSize: FIXED_BATCH_SIZE,
+      onProgress,
+    });
+    post({
+      type: "progress",
+      role,
+      requestId,
+      phase: "detecting-staves",
+      fraction: 1,
+    });
+    const staves = detectStaves(masks.staff);
+    console.info(
+      `[omr] staff/symbol ${image.width}x${image.height} via ${backend.provider}: ` +
+        `${Math.round(performance.now() - start)}ms`,
+    );
+    post(
+      {
+        type: "result",
+        role,
+        requestId,
+        width: masks.width,
+        height: masks.height,
+        staff: masks.staff,
+        symbols: masks.symbols,
+        staves,
+      },
+      [masks.staff.data.buffer, masks.symbols.data.buffer],
+    );
+    return;
+  }
+
+  const masks = await segmentSymbolDetail(image, model, {
+    batchSize: FIXED_BATCH_SIZE,
+    onProgress,
   });
-  const segmentMs = performance.now() - segmentStart;
-
-  post({ type: "progress", requestId, phase: "detecting-staves", fraction: 1 });
-  const stavesStart = performance.now();
-  const staves = detectStaves(masks.staff);
   console.info(
-    `[omr] ${image.width}x${image.height} via ${backend.provider}: ` +
-      `segment ${Math.round(segmentMs)}ms, ` +
-      `detect-staves ${Math.round(performance.now() - stavesStart)}ms`,
+    `[omr] symbol-detail ${image.width}x${image.height} via ${backend.provider}: ` +
+      `${Math.round(performance.now() - start)}ms`,
   );
-
-  // Transfer the mask buffers (~4 MB each) rather than copying them back.
-  post({ type: "result", requestId, masks, staves }, [
-    masks.staff.data.buffer,
-    masks.symbols.data.buffer,
-    masks.stemsRests.data.buffer,
-    masks.noteheads.data.buffer,
-    masks.clefsKeys.data.buffer,
-  ]);
+  post(
+    {
+      type: "result",
+      role,
+      requestId,
+      width: masks.width,
+      height: masks.height,
+      stemsRests: masks.stemsRests,
+      noteheads: masks.noteheads,
+      clefsKeys: masks.clefsKeys,
+    },
+    [
+      masks.stemsRests.data.buffer,
+      masks.noteheads.data.buffer,
+      masks.clefsKeys.data.buffer,
+    ],
+  );
 }
-
-// The config message arrives once at startup, before any process request, and
-// fixes the backend for this worker's lifetime.
-let config: OmrConfig | null = null;
 
 workerScope.addEventListener("message", (event) => {
   const request = event.data;
   if (request.type === "config") {
-    config = { backend: request.backend };
+    config = request;
     // Resolve the backend now so the UI can show the provider before any drop.
     getBackend(config).then((backend) => {
-      post({ type: "ready", provider: backend.provider });
+      post({ type: "ready", role: request.role, provider: backend.provider });
     });
     return;
   }
@@ -153,16 +192,20 @@ workerScope.addEventListener("message", (event) => {
     return;
   }
   if (config === null) {
+    // No role is known yet, so report against the request without one.
     post({
       type: "error",
+      role: "staffSymbol",
       requestId: request.requestId,
       message: "Received a process request before the worker was configured",
     });
     return;
   }
-  process(config, request.requestId, request.image).catch((error) => {
+  const settings = config;
+  process(settings, request.requestId, request.image).catch((error) => {
     post({
       type: "error",
+      role: settings.role,
       requestId: request.requestId,
       message: messageOf(error),
     });

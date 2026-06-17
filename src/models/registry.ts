@@ -5,9 +5,11 @@ import {
   modelUrl,
 } from "../../lib/models/manifest";
 import {
-  createSegmentationModels,
   type SegmentationModels,
+  STAFF_SYMBOL_MODEL_SPEC,
+  SYMBOL_DETAIL_MODEL_SPEC,
 } from "../../lib/segmentation/segment";
+import type { SegmentationModel } from "../../lib/segmentation/unet-session";
 
 /**
  * Loads the ONNX model weights, caching the downloaded bytes so repeat visits
@@ -46,21 +48,39 @@ export interface LoadModelsOptions {
   onAssetLoading?: (entry: ModelManifestEntry) => void;
 }
 
+/** Download (or read from cache) the `unet_big` model and build its session. */
+export async function loadStaffSymbolModel(
+  backend: InferenceBackend,
+  options: LoadModelsOptions = {},
+): Promise<SegmentationModel> {
+  options.onAssetLoading?.(MODEL_MANIFEST.staffSymbol);
+  const bytes = await fetchModelBytes(MODEL_MANIFEST.staffSymbol);
+  const session = await backend.createSession(bytes);
+  return { spec: STAFF_SYMBOL_MODEL_SPEC, session };
+}
+
+/** Download (or read from cache) the `seg_net` model and build its session. */
+export async function loadSymbolDetailModel(
+  backend: InferenceBackend,
+  options: LoadModelsOptions = {},
+): Promise<SegmentationModel> {
+  options.onAssetLoading?.(MODEL_MANIFEST.symbolDetail);
+  const bytes = await fetchModelBytes(MODEL_MANIFEST.symbolDetail);
+  const session = await backend.createSession(bytes);
+  return { spec: SYMBOL_DETAIL_MODEL_SPEC, session };
+}
+
 /**
  * Download (or read from cache) both segmentation models and create their
- * inference sessions on the given backend.
+ * inference sessions on the given backend. The parallel worker pipeline loads
+ * the two models separately (one per worker); this stays for any single-worker
+ * or test path that wants both at once.
  */
 export async function loadSegmentationModels(
   backend: InferenceBackend,
   options: LoadModelsOptions = {},
 ): Promise<SegmentationModels> {
-  options.onAssetLoading?.(MODEL_MANIFEST.staffSymbol);
-  const staffSymbolBytes = await fetchModelBytes(MODEL_MANIFEST.staffSymbol);
-  const staffSymbolSession = await backend.createSession(staffSymbolBytes);
-
-  options.onAssetLoading?.(MODEL_MANIFEST.symbolDetail);
-  const symbolDetailBytes = await fetchModelBytes(MODEL_MANIFEST.symbolDetail);
-  const symbolDetailSession = await backend.createSession(symbolDetailBytes);
-
-  return createSegmentationModels(staffSymbolSession, symbolDetailSession);
+  const staffSymbol = await loadStaffSymbolModel(backend, options);
+  const symbolDetail = await loadSymbolDetailModel(backend, options);
+  return { staffSymbol, symbolDetail };
 }

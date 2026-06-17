@@ -4,6 +4,9 @@ import type { RgbaImage } from "../types";
 import {
   createSegmentationModels,
   segment,
+  segmentStaffSymbol,
+  segmentSymbolDetail,
+  STAFF_SYMBOL_MODEL_SPEC,
   SYMBOL_DETAIL_MODEL_SPEC,
 } from "./segment";
 import { runSegmentationModel } from "./unet-session";
@@ -93,6 +96,39 @@ describe("segment", () => {
     expect(allOnes(masks.noteheads)).toBe(true);
     expect(allZeros(masks.stemsRests)).toBe(true);
     expect(allZeros(masks.clefsKeys)).toBe(true);
+  });
+
+  it("reduces the unet_big classes to staff and symbol masks", async () => {
+    const image = blankImage(300, 260);
+    const masks = await segmentStaffSymbol(
+      image,
+      {
+        spec: STAFF_SYMBOL_MODEL_SPEC,
+        // class 1 == staff.
+        session: constantClassSession("prediction", 3, 1),
+      },
+      { batchSize: 2 },
+    );
+    expect(masks.width).toBe(300);
+    expect(masks.height).toBe(260);
+    expect(masks.staff.data.every((value) => value === 1)).toBe(true);
+    expect(masks.symbols.data.every((value) => value === 0)).toBe(true);
+  });
+
+  it("reduces the seg_net classes to the three symbol masks", async () => {
+    const image = blankImage(300, 260);
+    const masks = await segmentSymbolDetail(
+      image,
+      {
+        spec: SYMBOL_DETAIL_MODEL_SPEC,
+        // class 2 == noteheads.
+        session: constantClassSession("conv2d_25", 4, 2),
+      },
+      { batchSize: 2 },
+    );
+    expect(masks.noteheads.data.every((value) => value === 1)).toBe(true);
+    expect(masks.stemsRests.data.every((value) => value === 0)).toBe(true);
+    expect(masks.clefsKeys.data.every((value) => value === 0)).toBe(true);
   });
 
   it("threads progress across both models from 0 to 1", async () => {
