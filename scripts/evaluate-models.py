@@ -144,13 +144,17 @@ def fp16_graph(reference: onnx.ModelProto) -> onnx.ModelProto:
     (the uint8 input and a float32 output), so only the interior runs at half
     precision, the way the WebGPU EP would execute it.
 
-    The conversion warns once per weight that underflows fp16's smallest normal
-    (clamped to ±min). That truncation is exactly the precision loss this gate
-    measures, so it is expected, not a problem — silence it to keep the report
-    readable."""
+    `op_block_list=[]` forces every interior op to fp16 (no fp32 islands), which
+    MUST match optimize-models.py's `to_fp16` so the gate measures exactly the
+    served form. The conversion warns once per weight that underflows fp16's
+    smallest normal (clamped to ±min). That truncation is exactly the precision
+    loss this gate measures, so it is expected, not a problem — silence it to keep
+    the report readable."""
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
-        return float16.convert_float_to_float16(reference, keep_io_types=True)
+        return float16.convert_float_to_float16(
+            reference, keep_io_types=True, op_block_list=[]
+        )
 
 
 def fp16_weight_emulation(reference: onnx.ModelProto) -> onnx.ModelProto:

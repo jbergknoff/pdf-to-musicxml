@@ -63,17 +63,25 @@ MAX_ABS_DIFF_TOLERANCE = 1e-4
 
 
 def to_fp16(model: onnx.ModelProto) -> onnx.ModelProto:
-    """Convert the simplified graph to half precision, leaving the I/O dtypes
-    (uint8 in, float32 out) intact so only the interior runs at fp16 — the form
-    the WebGPU EP benefits from. The conversion warns once per weight that
-    underflows fp16's smallest normal; that truncation is the expected, vetted
-    loss, so silence it. Import lazily so the default (lossless) path needs no
-    extra dependency."""
+    """Convert the simplified graph to half precision. `keep_io_types=True` pins
+    the uint8 input and float32 output (so only two boundary casts remain and the
+    lib needs no change), while `op_block_list=[]` forces *every* interior op to
+    fp16 — no fp32 islands. The conservative default block list leaves some ops in
+    fp32, and each island needs Cast pairs around it; on this graph those casts
+    (or the blocked ops) fell off ORT-web's WebGPU EP and reintroduced the
+    per-tile GPU<->CPU round-trips Phase 1 removed, regressing to pre-Phase-1
+    speeds despite `shader-f16`. Forcing the whole interior to fp16 removes those
+    islands. The conversion warns once per weight that underflows fp16's smallest
+    normal — expected, vetted loss — so silence it. Import lazily so the default
+    (lossless) path needs no extra dependency. MUST match evaluate-models.py's
+    `fp16_graph` so the gate measures the served form."""
     from onnxconverter_common import float16
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
-        return float16.convert_float_to_float16(model, keep_io_types=True)
+        return float16.convert_float_to_float16(
+            model, keep_io_types=True, op_block_list=[]
+        )
 
 
 def optimize(path: str, fp16: bool) -> None:
