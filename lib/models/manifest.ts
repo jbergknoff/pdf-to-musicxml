@@ -20,7 +20,7 @@
  * a bump also rolls out a re-optimization. Re-run `make optimize-models` and
  * `make upload-models` after bumping.
  */
-export const MODEL_VERSION = "v3";
+export const MODEL_VERSION = "v2";
 
 /**
  * Name of the Netlify Blobs store the weights live in. They are uploaded once,
