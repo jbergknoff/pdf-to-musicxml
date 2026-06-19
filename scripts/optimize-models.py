@@ -114,8 +114,25 @@ def main() -> None:
         raise SystemExit(
             f"No .onnx files in {MODELS_DIRECTORY}/ — run `make models` first."
         )
-    print(f"Optimizing {len(paths)} model(s) in {MODELS_DIRECTORY}/")
-    for path in paths:
+    # Only the oemer UNets (filename prefix "oemer-") get the fixed-shape
+    # onnxsim treatment. The TrOMR encoder-decoder ("tromr-*.onnx") has a
+    # variable-width input and multiple output heads that the transform can't
+    # handle, so it is served as-is from the source download.
+    segmentation_paths = [
+        p for p in paths if os.path.basename(p).startswith("oemer-")
+    ]
+    skipped = len(paths) - len(segmentation_paths)
+    if skipped:
+        skipped_names = [
+            os.path.basename(p)
+            for p in paths
+            if not os.path.basename(p).startswith("oemer-")
+        ]
+        print(f"Skipping {skipped} non-segmentation model(s): {skipped_names}")
+    print(
+        f"Optimizing {len(segmentation_paths)} segmentation model(s) in {MODELS_DIRECTORY}/"
+    )
+    for path in segmentation_paths:
         optimize(path)
     print("Done. Optimized weights written in place; numerically verified.")
 
