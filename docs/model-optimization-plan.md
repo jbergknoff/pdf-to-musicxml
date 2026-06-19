@@ -81,6 +81,88 @@ unless dilated; staff structure is the trustworthy signal.) Net: the resolution
 lever is tapped out at 1 M px; further speedup would need the model-level levers
 below, which the project is avoiding.
 
+Full run (mask IoU dilation-tolerant at ±2 px; the harness exits non-zero because
+0.75 M px failed on the denser page). Note the per-tile `[omr]` timings are
+CPU-EP — the harness runs on onnxruntime-node, not WebGPU, so its wall-clock is
+not the browser figure; it exists to compare *outputs* across resolutions, not to
+measure speed:
+
+```
+$ make compare-resolutions
+docker compose run --rm  main bun run scripts/download-models.ts
+✓ oemer-unet_big-staffline-symbol-seg.v2.onnx already present
+✓ oemer-seg_net-symbol-class-seg.v2.onnx already present
+Models ready in public/models/
+docker compose run --rm  main bun run scripts/compare-resolutions.ts
+Comparing 4 candidate budget(s) against a 3.00 MP reference over 2 page(s).
+Pass (gate): same staff count and stafflines within 0.5 interline units of the reference.
+Mask IoU is informational, measured within ±2px.
+
+[omr] staff/symbol model: 58 tiles (window 256, step 224, batch 1, 5 blank skipped)
+[omr] staff/symbol model: 18154ms (313.0ms/tile)
+[omr] symbol-detail model: 44 tiles (window 288, step 252, batch 1, 4 blank skipped)
+[omr] symbol-detail model: 24581ms (558.6ms/tile)
+samples/At the Bottom of the Night.png  (decoded 775x1011)
+  reference 3.00 MP -> 1516x1978: 9 staves, unit 11.7px
+[omr] staff/symbol model: 42 tiles (window 256, step 224, batch 1, 6 blank skipped)
+[omr] staff/symbol model: 14667ms (349.2ms/tile)
+[omr] symbol-detail model: 35 tiles (window 288, step 252, batch 1, 0 blank skipped)
+[omr] symbol-detail model: 19617ms (560.5ms/tile)
+  2.00 MP -> 1238x1615: PASS — 9 staves [count ok], max line dev 0.8px (0.07 units), unit 3.1% off
+      mask IoU: staff 0.784, symbols 0.795, stemsRests 0.788, noteheads 0.876, clefsKeys 0.870
+[omr] staff/symbol model: 35 tiles (window 256, step 224, batch 1, 0 blank skipped)
+[omr] staff/symbol model: 11210ms (320.3ms/tile)
+[omr] symbol-detail model: 30 tiles (window 288, step 252, batch 1, 0 blank skipped)
+[omr] symbol-detail model: 15859ms (528.6ms/tile)
+  1.50 MP -> 1072x1399: PASS — 9 staves [count ok], max line dev 0.9px (0.08 units), unit 0.6% off
+      mask IoU: staff 0.756, symbols 0.768, stemsRests 0.787, noteheads 0.838, clefsKeys 0.811
+[omr] staff/symbol model: 20 tiles (window 256, step 224, batch 1, 0 blank skipped)
+[omr] staff/symbol model: 6379ms (319.0ms/tile)
+[omr] symbol-detail model: 20 tiles (window 288, step 252, batch 1, 0 blank skipped)
+[omr] symbol-detail model: 10633ms (531.7ms/tile)
+  1.00 MP -> 876x1142: PASS — 9 staves [count ok], max line dev 1.0px (0.09 units), unit 2.8% off
+      mask IoU: staff 0.733, symbols 0.704, stemsRests 0.745, noteheads 0.818, clefsKeys 0.796
+[omr] staff/symbol model: 20 tiles (window 256, step 224, batch 1, 0 blank skipped)
+[omr] staff/symbol model: 6206ms (310.3ms/tile)
+[omr] symbol-detail model: 12 tiles (window 288, step 252, batch 1, 0 blank skipped)
+[omr] symbol-detail model: 6230ms (519.2ms/tile)
+  0.75 MP -> 758x989: FAIL — 8 staves [COUNT MISMATCH vs 9]
+      mask IoU: staff 0.757, symbols 0.735, stemsRests 0.724, noteheads 0.837, clefsKeys 0.805
+
+[omr] staff/symbol model: 63 tiles (window 256, step 224, batch 1, 0 blank skipped)
+[omr] staff/symbol model: 21264ms (337.5ms/tile)
+[omr] symbol-detail model: 48 tiles (window 288, step 252, batch 1, 0 blank skipped)
+[omr] symbol-detail model: 27503ms (573.0ms/tile)
+samples/Rondo Alla Turca.png  (decoded 772x1005)
+  reference 3.00 MP -> 1518x1976: 10 staves, unit 12.8px
+[omr] staff/symbol model: 48 tiles (window 256, step 224, batch 1, 0 blank skipped)
+[omr] staff/symbol model: 16608ms (346.0ms/tile)
+[omr] symbol-detail model: 35 tiles (window 288, step 252, batch 1, 0 blank skipped)
+[omr] symbol-detail model: 19571ms (559.2ms/tile)
+  2.00 MP -> 1239x1614: PASS — 10 staves [count ok], max line dev 0.8px (0.06 units), unit 0.6% off
+      mask IoU: staff 0.779, symbols 0.843, stemsRests 0.816, noteheads 0.882, clefsKeys 0.793
+[omr] staff/symbol model: 35 tiles (window 256, step 224, batch 1, 0 blank skipped)
+[omr] staff/symbol model: 11279ms (322.2ms/tile)
+[omr] symbol-detail model: 30 tiles (window 288, step 252, batch 1, 0 blank skipped)
+[omr] symbol-detail model: 17819ms (594.0ms/tile)
+  1.50 MP -> 1073x1397: PASS — 10 staves [count ok], max line dev 0.9px (0.07 units), unit 0.2% off
+      mask IoU: staff 0.772, symbols 0.830, stemsRests 0.814, noteheads 0.876, clefsKeys 0.795
+[omr] staff/symbol model: 20 tiles (window 256, step 224, batch 1, 0 blank skipped)
+[omr] staff/symbol model: 6201ms (310.1ms/tile)
+[omr] symbol-detail model: 20 tiles (window 288, step 252, batch 1, 0 blank skipped)
+[omr] symbol-detail model: 11403ms (570.1ms/tile)
+  1.00 MP -> 876x1141: PASS — 10 staves [count ok], max line dev 0.9px (0.07 units), unit 1.2% off
+      mask IoU: staff 0.699, symbols 0.805, stemsRests 0.775, noteheads 0.856, clefsKeys 0.719
+[omr] staff/symbol model: 20 tiles (window 256, step 224, batch 1, 0 blank skipped)
+[omr] staff/symbol model: 6511ms (325.6ms/tile)
+[omr] symbol-detail model: 12 tiles (window 288, step 252, batch 1, 0 blank skipped)
+[omr] symbol-detail model: 6927ms (577.3ms/tile)
+  0.75 MP -> 759x988: PASS — 10 staves [count ok], max line dev 1.5px (0.12 units), unit 0.0% off
+      mask IoU: staff 0.693, symbols 0.799, stemsRests 0.746, noteheads 0.871, clefsKeys 0.707
+
+FAIL: a candidate budget did not match the reference.
+```
+
 **Parallel-workers experiment (tried and reverted):** Running the two models
 in separate workers to overlap GPU dispatch showed that the GPU is the wall.
 Both workers slowed ~2× (236 ms/tile → 592 ms, 492 ms/tile → 701 ms) because
