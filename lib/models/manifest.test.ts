@@ -21,7 +21,8 @@ describe("model manifest", () => {
     expect(MODEL_ENTRIES.map((entry) => entry.id).sort()).toEqual([
       "staffSymbol",
       "symbolDetail",
-      "tromr",
+      "tromrDecoder",
+      "tromrEncoder",
     ]);
   });
 });

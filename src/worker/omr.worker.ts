@@ -1,8 +1,5 @@
-import { MODEL_MANIFEST, TROMR_SPEC } from "../../lib/models/manifest";
-import type {
-  InferenceBackend,
-  InferenceSession,
-} from "../../lib/runtime/inference-backend";
+import { MODEL_MANIFEST } from "../../lib/models/manifest";
+import type { InferenceBackend } from "../../lib/runtime/inference-backend";
 import {
   type SegmentationModels,
   segment,
@@ -10,7 +7,8 @@ import {
 import { detectStaves } from "../../lib/staves/detect-staves";
 import { buildMusicXML } from "../../lib/assembly/musicxml-builder";
 import { transcribeStaves } from "../../lib/transcription/transcribe";
-import { loadSegmentationModels, loadTrOMRModel } from "../models/registry";
+import type { TrOMRSessions } from "../../lib/transcription/tromr-session";
+import { loadSegmentationModels, loadTrOMRModels } from "../models/registry";
 import { createWebBackend } from "../runtime/web-backend";
 import type {
   OmrConfig,
@@ -62,7 +60,7 @@ const FIXED_BATCH_SIZE = MODEL_MANIFEST.staffSymbol.inputShape[0];
 // so it's resolved here exactly once per worker lifetime.
 let backendPromise: Promise<InferenceBackend> | null = null;
 let modelsPromise: Promise<SegmentationModels> | null = null;
-let tromrPromise: Promise<InferenceSession> | null = null;
+let tromrPromise: Promise<TrOMRSessions> | null = null;
 
 function getBackend(config: OmrConfig): Promise<InferenceBackend> {
   if (backendPromise === null) {
@@ -100,9 +98,9 @@ function getModels(
 function getTrOMR(
   backend: InferenceBackend,
   requestId: number,
-): Promise<InferenceSession> {
+): Promise<TrOMRSessions> {
   if (tromrPromise === null) {
-    tromrPromise = loadTrOMRModel(backend, {
+    tromrPromise = loadTrOMRModels(backend, {
       onAssetLoading: (entry) => {
         post({
           type: "progress",
@@ -154,12 +152,11 @@ async function process(
   let musicXml = "";
   let transcriptions: import("../../lib/types").Transcription[] = [];
   if (staves.staves.length > 0) {
-    const tromrSession = await getTrOMR(backend, requestId);
+    const tromrSessions = await getTrOMR(backend, requestId);
     post({ type: "progress", requestId, phase: "transcribing", fraction: 0 });
     const transcribeStart = performance.now();
     transcriptions = await transcribeStaves(
-      tromrSession,
-      TROMR_SPEC,
+      tromrSessions,
       image,
       staves.staves,
       {

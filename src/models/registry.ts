@@ -7,6 +7,7 @@ import {
   type ModelManifestEntry,
   modelUrl,
 } from "../../lib/models/manifest";
+import type { TrOMRSessions } from "../../lib/transcription/tromr-session";
 import {
   createSegmentationModels,
   type SegmentationModels,
@@ -16,12 +17,13 @@ import {
  * Loads the ONNX model weights, caching the downloaded bytes so repeat visits
  * (and offline use) skip the network.
  *
- * The weights are large (~70 MB + ~38 MB) and live in Netlify Blobs rather than
- * the static deploy; a function streams them back from the same origin at
- * `/models/<file>` (see netlify/functions/models.mts). Same-origin matters under
- * cross-origin isolation (COEP `require-corp`). The versioned, immutable URLs
- * come from the shared manifest; once fetched the bytes are stored in the Cache
- * Storage API. Locally, `scripts/serve.ts` serves the same paths from disk.
+ * The weights are large (~70 MB + ~38 MB) and live in Netlify Blobs rather
+ * than the static deploy; a function streams them back from the same origin at
+ * `/models/<file>` (see netlify/functions/models.mts). Same-origin matters
+ * under cross-origin isolation (COEP `require-corp`). The versioned, immutable
+ * URLs come from the shared manifest; once fetched the bytes are stored in the
+ * Cache Storage API. Locally, `scripts/serve.ts` serves the same paths from
+ * disk.
  */
 
 const CACHE_NAME = "pdf-to-musicxml-models-v1";
@@ -69,14 +71,21 @@ export async function loadSegmentationModels(
 }
 
 /**
- * Download (or read from cache) the TrOMR model and create an inference
- * session on the given backend.
+ * Download (or read from cache) the TrOMR encoder and decoder models and
+ * create their inference sessions on the given backend. Returns both sessions
+ * as a `TrOMRSessions` object for the transcription pipeline.
  */
-export async function loadTrOMRModel(
+export async function loadTrOMRModels(
   backend: InferenceBackend,
   options: LoadModelsOptions = {},
-): Promise<InferenceSession> {
-  options.onAssetLoading?.(MODEL_MANIFEST.tromr);
-  const bytes = await fetchModelBytes(MODEL_MANIFEST.tromr);
-  return backend.createSession(bytes);
+): Promise<TrOMRSessions> {
+  options.onAssetLoading?.(MODEL_MANIFEST.tromrEncoder);
+  const encoderBytes = await fetchModelBytes(MODEL_MANIFEST.tromrEncoder);
+  const encoder: InferenceSession = await backend.createSession(encoderBytes);
+
+  options.onAssetLoading?.(MODEL_MANIFEST.tromrDecoder);
+  const decoderBytes = await fetchModelBytes(MODEL_MANIFEST.tromrDecoder);
+  const decoder: InferenceSession = await backend.createSession(decoderBytes);
+
+  return { encoder, decoder };
 }

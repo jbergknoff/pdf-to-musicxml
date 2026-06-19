@@ -4,60 +4,111 @@ import {
   BOS,
   EOS,
   PAD,
+  NONOTE,
   PITCH_VOCAB,
   RHYTHM_VOCAB,
   LIFT_VOCAB,
-  BARLINE,
 } from "./vocabulary";
 
 /** Find the token index for a string in a vocab array. */
 function indexOf(vocab: readonly string[], token: string): number {
   const index = vocab.indexOf(token);
   if (index === -1) {
-    throw new Error(`Token not found: ${token}`);
+    throw new Error(`Token not found in vocab: "${token}"`);
   }
   return index;
 }
 
 describe("decodeTokens", () => {
-  it("returns empty array for sequences with only EOS", () => {
+  it("returns empty array when all tokens are EOS", () => {
     const result = decodeTokens([EOS], [EOS], [EOS]);
     expect(result).toEqual([]);
   });
 
-  it("decodes a single quarter note C4 with no accidental", () => {
-    const rhythmId = indexOf(RHYTHM_VOCAB, "quarter");
+  it("decodes a quarter note C4 with no accidental", () => {
+    const rhythmId = indexOf(RHYTHM_VOCAB, "note_4");
     const pitchId = indexOf(PITCH_VOCAB, "C4");
-    const liftId = indexOf(LIFT_VOCAB, "natural");
+    const liftId = indexOf(LIFT_VOCAB, "_"); // no accidental
 
     const result = decodeTokens([rhythmId, EOS], [pitchId, EOS], [liftId, EOS]);
     expect(result).toHaveLength(1);
     expect(result[0].pitch).toBe("C4");
     expect(result[0].duration).toBe("quarter");
     expect(result[0].dotted).toBe(false);
-    expect(result[0].accidental).toBe("natural");
+    expect(result[0].accidental).toBeNull();
     expect(result[0].measureIndex).toBe(0);
   });
 
-  it("decodes a dotted half note", () => {
-    const rhythmId = indexOf(RHYTHM_VOCAB, "dotted_half");
+  it("decodes a dotted half note G4", () => {
+    const rhythmId = indexOf(RHYTHM_VOCAB, "note_2.");
     const pitchId = indexOf(PITCH_VOCAB, "G4");
-    const liftId = indexOf(LIFT_VOCAB, "natural");
+    const liftId = indexOf(LIFT_VOCAB, "_");
 
     const result = decodeTokens([rhythmId, EOS], [pitchId, EOS], [liftId, EOS]);
     expect(result[0].duration).toBe("half");
     expect(result[0].dotted).toBe(true);
+    expect(result[0].pitch).toBe("G4");
+  });
+
+  it("decodes a whole note", () => {
+    const rhythmId = indexOf(RHYTHM_VOCAB, "note_1");
+    const pitchId = indexOf(PITCH_VOCAB, "A4");
+    const liftId = indexOf(LIFT_VOCAB, "_");
+
+    const result = decodeTokens([rhythmId, EOS], [pitchId, EOS], [liftId, EOS]);
+    expect(result[0].duration).toBe("whole");
+    expect(result[0].dotted).toBe(false);
+  });
+
+  it("decodes a sharp accidental", () => {
+    const rhythmId = indexOf(RHYTHM_VOCAB, "note_4");
+    const pitchId = indexOf(PITCH_VOCAB, "F4");
+    const liftId = indexOf(LIFT_VOCAB, "#");
+
+    const result = decodeTokens([rhythmId, EOS], [pitchId, EOS], [liftId, EOS]);
+    expect(result[0].accidental).toBe("sharp");
+  });
+
+  it("decodes a flat accidental", () => {
+    const rhythmId = indexOf(RHYTHM_VOCAB, "note_4");
+    const pitchId = indexOf(PITCH_VOCAB, "B4");
+    const liftId = indexOf(LIFT_VOCAB, "b");
+
+    const result = decodeTokens([rhythmId, EOS], [pitchId, EOS], [liftId, EOS]);
+    expect(result[0].accidental).toBe("flat");
+  });
+
+  it("decodes a natural accidental", () => {
+    const rhythmId = indexOf(RHYTHM_VOCAB, "note_4");
+    const pitchId = indexOf(PITCH_VOCAB, "C4");
+    const liftId = indexOf(LIFT_VOCAB, "N");
+
+    const result = decodeTokens([rhythmId, EOS], [pitchId, EOS], [liftId, EOS]);
+    expect(result[0].accidental).toBe("natural");
+  });
+
+  it("decodes an eighth rest", () => {
+    const rhythmId = indexOf(RHYTHM_VOCAB, "rest_8");
+    const pitchId = NONOTE; // "." nonote
+    const liftId = NONOTE;
+
+    const result = decodeTokens([rhythmId, EOS], [pitchId, EOS], [liftId, EOS]);
+    expect(result[0].pitch).toBe("rest");
+    expect(result[0].duration).toBe("eighth");
   });
 
   it("increments measureIndex at barline tokens", () => {
-    const quarter = indexOf(RHYTHM_VOCAB, "quarter");
+    const quarterNote = indexOf(RHYTHM_VOCAB, "note_4");
     const pitchC4 = indexOf(PITCH_VOCAB, "C4");
     const pitchD4 = indexOf(PITCH_VOCAB, "D4");
-    const natural = indexOf(LIFT_VOCAB, "natural");
+    const barline = indexOf(RHYTHM_VOCAB, "barline");
+    const noAccidental = indexOf(LIFT_VOCAB, "_");
+    const nonote = NONOTE;
 
-    const rhythm = [quarter, BARLINE, quarter, EOS];
-    const pitch = [pitchC4, pitchD4, EOS];
-    const lift = [natural, natural, EOS];
+    // note_4(C4) | barline(.) | note_4(D4) | EOS
+    const rhythm = [quarterNote, barline, quarterNote, EOS];
+    const pitch = [pitchC4, nonote, pitchD4, EOS];
+    const lift = [noAccidental, nonote, noAccidental, EOS];
 
     const result = decodeTokens(rhythm, pitch, lift);
     expect(result).toHaveLength(2);
@@ -65,62 +116,103 @@ describe("decodeTokens", () => {
     expect(result[1].measureIndex).toBe(1);
   });
 
-  it("decodes a rest", () => {
-    const rhythmId = indexOf(RHYTHM_VOCAB, "eighth");
-    const pitchId = indexOf(PITCH_VOCAB, "rest");
-    const liftId = indexOf(LIFT_VOCAB, "natural");
-
-    const result = decodeTokens([rhythmId, EOS], [pitchId, EOS], [liftId, EOS]);
-    expect(result[0].pitch).toBe("rest");
-    expect(result[0].duration).toBe("eighth");
-  });
-
-  it("decodes a sharp accidental", () => {
-    const rhythmId = indexOf(RHYTHM_VOCAB, "quarter");
-    const pitchId = indexOf(PITCH_VOCAB, "F4");
-    const liftId = indexOf(LIFT_VOCAB, "sharp");
-
-    const result = decodeTokens([rhythmId, EOS], [pitchId, EOS], [liftId, EOS]);
-    expect(result[0].accidental).toBe("sharp");
-  });
-
-  it("skips BOS tokens at the start of each sequence", () => {
-    const quarter = indexOf(RHYTHM_VOCAB, "quarter");
+  it("skips BOS tokens", () => {
+    const quarterNote = indexOf(RHYTHM_VOCAB, "note_4");
     const pitchC4 = indexOf(PITCH_VOCAB, "C4");
-    const natural = indexOf(LIFT_VOCAB, "natural");
+    const noAcc = indexOf(LIFT_VOCAB, "_");
 
     const result = decodeTokens(
-      [BOS, quarter, EOS],
+      [BOS, quarterNote, EOS],
       [BOS, pitchC4, EOS],
-      [BOS, natural, EOS],
+      [BOS, noAcc, EOS],
     );
     expect(result).toHaveLength(1);
     expect(result[0].pitch).toBe("C4");
   });
 
   it("stops at EOS in the rhythm sequence", () => {
-    const quarter = indexOf(RHYTHM_VOCAB, "quarter");
+    const quarterNote = indexOf(RHYTHM_VOCAB, "note_4");
     const pitchC4 = indexOf(PITCH_VOCAB, "C4");
-    const natural = indexOf(LIFT_VOCAB, "natural");
+    const noAcc = indexOf(LIFT_VOCAB, "_");
 
     const result = decodeTokens(
-      [quarter, EOS, quarter],
+      [quarterNote, EOS, quarterNote],
       [pitchC4, pitchC4, pitchC4],
-      [natural, natural, natural],
+      [noAcc, noAcc, noAcc],
     );
     expect(result).toHaveLength(1);
   });
 
-  it("handles PAD tokens in rhythm by stopping", () => {
-    const quarter = indexOf(RHYTHM_VOCAB, "quarter");
+  it("stops at PAD in the rhythm sequence", () => {
+    const quarterNote = indexOf(RHYTHM_VOCAB, "note_4");
     const pitchC4 = indexOf(PITCH_VOCAB, "C4");
-    const natural = indexOf(LIFT_VOCAB, "natural");
+    const noAcc = indexOf(LIFT_VOCAB, "_");
 
     const result = decodeTokens(
-      [quarter, PAD, quarter],
-      [pitchC4, pitchC4],
-      [natural, natural],
+      [quarterNote, PAD, quarterNote],
+      [pitchC4, pitchC4, pitchC4],
+      [noAcc, noAcc, noAcc],
     );
     expect(result).toHaveLength(1);
+  });
+
+  it("skips unsupported kern durations (tuplets)", () => {
+    const tupletRhythm = indexOf(RHYTHM_VOCAB, "note_3"); // triplet, unsupported
+    const quarterNote = indexOf(RHYTHM_VOCAB, "note_4");
+    const pitchC4 = indexOf(PITCH_VOCAB, "C4");
+    const noAcc = indexOf(LIFT_VOCAB, "_");
+    const nonote = NONOTE;
+
+    const result = decodeTokens(
+      [tupletRhythm, quarterNote, EOS],
+      [nonote, pitchC4, EOS],
+      [nonote, noAcc, EOS],
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0].duration).toBe("quarter");
+  });
+
+  it("skips grace notes (G suffix)", () => {
+    const graceRhythm = indexOf(RHYTHM_VOCAB, "note_4G");
+    const quarterNote = indexOf(RHYTHM_VOCAB, "note_4");
+    const pitchC4 = indexOf(PITCH_VOCAB, "C4");
+    const noAcc = indexOf(LIFT_VOCAB, "_");
+    const nonote = NONOTE;
+
+    const result = decodeTokens(
+      [graceRhythm, quarterNote, EOS],
+      [nonote, pitchC4, EOS],
+      [nonote, noAcc, EOS],
+    );
+    expect(result).toHaveLength(1);
+  });
+
+  it("skips non-note rhythm tokens (clef, key sig, time sig)", () => {
+    const clef = indexOf(RHYTHM_VOCAB, "clef_G2");
+    const keySig = indexOf(RHYTHM_VOCAB, "keySignature_0");
+    const timeSig = indexOf(RHYTHM_VOCAB, "timeSignature/4");
+    const quarterNote = indexOf(RHYTHM_VOCAB, "note_4");
+    const pitchC4 = indexOf(PITCH_VOCAB, "C4");
+    const noAcc = indexOf(LIFT_VOCAB, "_");
+    const nonote = NONOTE;
+
+    const result = decodeTokens(
+      [clef, keySig, timeSig, quarterNote, EOS],
+      [nonote, nonote, nonote, pitchC4, EOS],
+      [nonote, nonote, nonote, noAcc, EOS],
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0].pitch).toBe("C4");
+    expect(result[0].duration).toBe("quarter");
+  });
+
+  it("maps a multi-measure rest to a whole rest", () => {
+    const multirest = indexOf(RHYTHM_VOCAB, "rest_4m");
+    const nonote = NONOTE;
+
+    const result = decodeTokens([multirest, EOS], [nonote, EOS], [nonote, EOS]);
+    expect(result).toHaveLength(1);
+    expect(result[0].pitch).toBe("rest");
+    expect(result[0].duration).toBe("whole");
   });
 });

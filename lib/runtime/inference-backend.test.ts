@@ -13,12 +13,17 @@ function createDoublingBackend(): InferenceBackend {
     provider: "fake",
     async createSession() {
       return {
+        inputNames: ["input"],
         async run(feeds) {
           const output: Record<string, Tensor> = {};
           for (const [name, tensor] of Object.entries(feeds)) {
+            // Fake backend: only doubles float32 tensors (sufficient for this test).
+            const doubled = new Float32Array(
+              (tensor.data as Float32Array).map((v) => v * 2),
+            );
             output[name] = {
               type: tensor.type,
-              data: tensor.data.map((value) => value * 2),
+              data: doubled,
               dims: tensor.dims,
             };
           }
@@ -45,7 +50,7 @@ describe("InferenceBackend contract", () => {
         dims: [1, 3],
       },
     });
-    expect(Array.from(result.input.data)).toEqual([2, 4, 6]);
+    expect(Array.from(result.input.data as Float32Array)).toEqual([2, 4, 6]);
     expect(result.input.dims).toEqual([1, 3]);
     expect(result.input.type).toBe("float32");
   });

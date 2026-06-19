@@ -19,6 +19,7 @@ function constantClassSession(
   targetClass: number,
 ): InferenceSession {
   return {
+    inputNames: ["input"],
     async run(feeds) {
       const input = Object.values(feeds)[0];
       const [batch, windowSize] = input.dims;

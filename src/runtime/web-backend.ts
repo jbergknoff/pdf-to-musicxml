@@ -21,13 +21,30 @@ function toOrtTensor(tensor: Tensor): ort.Tensor {
   if (tensor.type === "uint8") {
     return new ort.Tensor("uint8", tensor.data as Uint8Array, tensor.dims);
   }
+  if (tensor.type === "int64") {
+    return new ort.Tensor("int64", tensor.data as BigInt64Array, tensor.dims);
+  }
   return new ort.Tensor("float32", tensor.data as Float32Array, tensor.dims);
 }
 
 function fromOrtTensor(value: ort.Tensor): Tensor {
+  if (value.type === "uint8") {
+    return {
+      type: "uint8",
+      data: value.data as Uint8Array,
+      dims: value.dims as number[],
+    };
+  }
+  if (value.type === "int64") {
+    return {
+      type: "int64",
+      data: value.data as BigInt64Array,
+      dims: value.dims as number[],
+    };
+  }
   return {
-    type: value.type as TensorDataType,
-    data: value.data as Float32Array | Uint8Array,
+    type: "float32",
+    data: value.data as Float32Array,
     dims: value.dims as number[],
   };
 }
@@ -105,6 +122,7 @@ export async function createWebBackend(
         logSeverityLevel: 3,
       });
       return {
+        inputNames: session.inputNames,
         async run(feeds) {
           const ortFeeds: Record<string, ort.Tensor> = {};
           for (const [name, tensor] of Object.entries(feeds)) {

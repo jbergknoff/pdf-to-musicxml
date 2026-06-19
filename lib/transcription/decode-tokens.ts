@@ -1,50 +1,100 @@
 /**
- * Converts the three raw token-ID sequences produced by TrOMR (rhythm, pitch,
- * lift) into a structured list of NoteEvents, splitting on barline tokens to
- * track measure positions.
+ * Converts the three raw token-ID sequences produced by the TrOMR decoder
+ * (rhythm, pitch, lift) into structured NoteEvents.
+ *
+ * The rhythm sequence drives the decoding loop. Each token is looked up in
+ * RHYTHM_VOCAB and classified:
+ *   - "note_X[G][.]" → a note with kern duration X (optionally dotted, grace)
+ *   - "rest_X[G][.]" → a rest with kern duration X
+ *   - "rest_Nm"      → a multi-measure rest (mapped to one whole rest)
+ *   - "barline" / "doublebarline" / ... → increment measure index
+ *   - "chord"        → note simultaneous with the previous one (kept as-is)
+ *   - "EOS" / "PAD"  → stop
+ *   - anything else  → skip (clefs, key/time signatures, volta brackets, ...)
+ *
+ * Pitch tokens use "C4", "D5", etc. Lift tokens use "#", "##", "N", "b",
+ * "bb", "_" (no accidental), or "." (nonote). Each rhythm token consumes one
+ * corresponding pitch and lift token at the same index.
  */
 import type { NoteEvent } from "../types";
-import {
-  BARLINE,
-  BOS,
-  EOS,
-  LIFT_VOCAB,
-  PAD,
-  PITCH_VOCAB,
-  RHYTHM_VOCAB,
-} from "./vocabulary";
+import { EOS, LIFT_VOCAB, PAD, PITCH_VOCAB, RHYTHM_VOCAB } from "./vocabulary";
 
-type AccidentalValue = NoteEvent["accidental"];
 type DurationValue = NoteEvent["duration"];
+type AccidentalValue = NoteEvent["accidental"];
 
-const DURATION_MAP: Record<string, DurationValue | undefined> = {
-  whole: "whole",
-  half: "half",
-  quarter: "quarter",
-  eighth: "eighth",
-  sixteenth: "sixteenth",
-  thirty_second: "thirty_second",
-  dotted_whole: "whole",
-  dotted_half: "half",
-  dotted_quarter: "quarter",
-  dotted_eighth: "eighth",
-  dotted_sixteenth: "sixteenth",
-  dotted_thirty_second: "thirty_second",
+// Humdrum kern number → standard duration name.
+// kern uses the inverse: 1=whole, 2=half, 4=quarter, 8=eighth, etc.
+const KERN_TO_DURATION: Readonly<Record<number, DurationValue | undefined>> = {
+  0: "whole", // breve (2 × whole); mapped to whole for MusicXML compatibility
+  1: "whole",
+  2: "half",
+  4: "quarter",
+  8: "eighth",
+  16: "sixteenth",
+  32: "thirty_second",
 };
 
-const ACCIDENTAL_MAP: Record<string, AccidentalValue> = {
-  natural: "natural",
-  sharp: "sharp",
-  flat: "flat",
-  double_sharp: "double_sharp",
-  double_flat: "double_flat",
+const LIFT_TO_ACCIDENTAL: Readonly<Record<string, AccidentalValue>> = {
+  "#": "sharp",
+  "##": "double_sharp",
+  N: "natural",
+  b: "flat",
+  bb: "double_flat",
 };
+
+/** Barline-class rhythm tokens that increment the measure counter. */
+const BARLINE_TOKENS = new Set([
+  "barline",
+  "doublebarline",
+  "bolddoublebarline",
+  "repeatStart",
+  "repeatEnd",
+  "repeatEndStart",
+]);
 
 /**
- * Decode three parallel token-ID arrays from TrOMR into an ordered list of
- * note events. The rhythm, pitch, and lift arrays are expected to be the same
- * length (after stripping BOS/EOS/PAD). Barline tokens in the rhythm sequence
- * increment the measure index for subsequent notes.
+ * Parse a "note_X[G][.]" or "rest_X[G][.]" token.
+ * Returns null for unsupported durations (tuplets, grace notes, double-dotted).
+ */
+function parseNoteRestToken(
+  token: string,
+): { isRest: boolean; duration: DurationValue; dotted: boolean } | null {
+  const isRest = token.startsWith("rest_");
+  const suffix = token.slice(isRest ? 5 : 5); // strip "rest_" or "note_"
+
+  // Multi-measure rest (rest_2m, rest_3m, …): emit as a single whole rest.
+  if (isRest && suffix.endsWith("m")) {
+    return { isRest: true, duration: "whole", dotted: false };
+  }
+
+  // Skip grace notes (contain "G") and double-dotted notes ("..").
+  if (suffix.includes("G") || suffix.endsWith("..")) {
+    return null;
+  }
+
+  const dotted = suffix.endsWith(".");
+  const durationStr = dotted ? suffix.slice(0, -1) : suffix;
+  const kernNum = Number(durationStr);
+  if (!Number.isInteger(kernNum)) {
+    return null;
+  }
+
+  const duration = KERN_TO_DURATION[kernNum];
+  if (duration === undefined) {
+    return null; // tuplet or unsupported kern number
+  }
+
+  return { isRest, duration, dotted };
+}
+
+/**
+ * Decode three parallel token-ID arrays from the TrOMR decoder into an
+ * ordered list of NoteEvents. The arrays must be aligned: index i in each
+ * array corresponds to the same musical symbol.
+ *
+ * Barline tokens in the rhythm sequence increment `measureIndex` for
+ * subsequent notes. Unsupported tokens (clefs, signatures, grace notes, …)
+ * are silently skipped.
  */
 export function decodeTokens(
   rhythmIds: ArrayLike<number>,
@@ -52,66 +102,53 @@ export function decodeTokens(
   liftIds: ArrayLike<number>,
 ): NoteEvent[] {
   const notes: NoteEvent[] = [];
-
-  // The three sequences may start with BOS and end with EOS; align them by
-  // walking until EOS or exhaustion, skipping PAD/BOS.
-  let pitchIndex = 0;
-  let liftIndex = 0;
   let measureIndex = 0;
 
-  for (let index = 0; index < rhythmIds.length; index++) {
-    const rhythmId = rhythmIds[index];
-    if (rhythmId === EOS || rhythmId === PAD) {
+  for (let i = 0; i < rhythmIds.length; i++) {
+    const rhythmId = rhythmIds[i];
+    const rhythmToken = RHYTHM_VOCAB[rhythmId] ?? "";
+
+    if (rhythmToken === "EOS" || rhythmToken === "PAD") {
       break;
     }
-    if (rhythmId === BOS) {
+    if (rhythmToken === "BOS") {
       continue;
     }
-    if (rhythmId === BARLINE) {
+
+    if (BARLINE_TOKENS.has(rhythmToken)) {
       measureIndex++;
-      // Barline tokens have no corresponding pitch/lift entries.
       continue;
     }
 
-    // Advance past BOS/PAD on pitch and lift.
-    while (
-      pitchIndex < pitchIds.length &&
-      (pitchIds[pitchIndex] === BOS || pitchIds[pitchIndex] === PAD)
-    ) {
-      pitchIndex++;
-    }
-    while (
-      liftIndex < liftIds.length &&
-      (liftIds[liftIndex] === BOS || liftIds[liftIndex] === PAD)
-    ) {
-      liftIndex++;
-    }
-
-    const pitchToken =
-      pitchIndex < pitchIds.length && pitchIds[pitchIndex] !== EOS
-        ? PITCH_VOCAB[pitchIds[pitchIndex++]]
-        : undefined;
-    const liftToken =
-      liftIndex < liftIds.length && liftIds[liftIndex] !== EOS
-        ? LIFT_VOCAB[liftIds[liftIndex++]]
-        : undefined;
-    const rhythmToken = RHYTHM_VOCAB[rhythmId];
-
-    if (rhythmToken === undefined || pitchToken === undefined) {
+    if (!rhythmToken.startsWith("note_") && !rhythmToken.startsWith("rest_")) {
+      // Chord, clef, key/time signature, volta, etc. — skip silently.
       continue;
     }
 
-    const duration = DURATION_MAP[rhythmToken];
-    if (duration === undefined) {
+    const parsed = parseNoteRestToken(rhythmToken);
+    if (parsed === null) {
       continue;
     }
 
-    const pitch = pitchToken === "rest" ? "rest" : pitchToken;
-    const accidental =
-      liftToken !== undefined ? (ACCIDENTAL_MAP[liftToken] ?? null) : null;
-    const dotted = rhythmToken.startsWith("dotted_");
+    const pitchToken = PITCH_VOCAB[pitchIds[i]] ?? ".";
+    const liftToken = LIFT_VOCAB[liftIds[i]] ?? ".";
 
-    notes.push({ pitch, accidental, duration, dotted, measureIndex });
+    const pitch: string | "rest" = parsed.isRest ? "rest" : pitchToken;
+
+    // Skip malformed note entries where pitch is nonote/empty but rhythm says note.
+    if (!parsed.isRest && (pitchToken === "." || pitchToken === "_")) {
+      continue;
+    }
+
+    const accidental: AccidentalValue = LIFT_TO_ACCIDENTAL[liftToken] ?? null;
+
+    notes.push({
+      pitch,
+      accidental,
+      duration: parsed.duration,
+      dotted: parsed.dotted,
+      measureIndex,
+    });
   }
 
   return notes;

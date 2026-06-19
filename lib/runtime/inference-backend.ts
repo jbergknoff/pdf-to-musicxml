@@ -9,18 +9,20 @@
 
 /**
  * The element types a {@link Tensor} can hold. The oemer segmentation models
- * take `uint8` RGB patches and emit `float32` probabilities, so both are
- * supported; the `type` tag selects the matching backing array.
+ * take `uint8` RGB patches and emit `float32` probabilities; TrOMR uses
+ * `int64` for token IDs and cache length counters.
  */
-export type TensorDataType = "float32" | "uint8";
+export type TensorDataType = "float32" | "uint8" | "int64";
 
 export interface Tensor {
   type: TensorDataType;
-  data: Float32Array | Uint8Array;
+  data: Float32Array | Uint8Array | BigInt64Array;
   dims: number[];
 }
 
 export interface InferenceSession {
+  /** The ordered input tensor names as declared in the ONNX graph. */
+  readonly inputNames: readonly string[];
   run(feeds: Record<string, Tensor>): Promise<Record<string, Tensor>>;
 }
 
