@@ -3,18 +3,21 @@ import type { RgbaImage } from "../types";
 /**
  * Image preprocessing for segmentation.
  *
- * oemer's models were trained on pages rescaled to a fixed pixel budget
- * (~3–4.35 M px), and the model's receptive field / unit size assume that
- * scale, so we match it before tiling. Larger pages are downscaled and tiny
- * ones upscaled into the band; pages already inside it are returned untouched.
+ * oemer's models were trained on pages rescaled to a ~3–4.35 M px band, and the
+ * model's receptive field / unit size assume that scale. Segmentation time
+ * scales ~linearly with pixel count (tiles per page), so we deliberately run
+ * *below* the training band to trade some recognition accuracy for a large
+ * WebGPU speedup: smaller pages mean fewer tiles. Larger pages are downscaled to
+ * the budget and tiny ones upscaled to it; pages already at it pass untouched.
  */
 
-// oemer's training band is 3–4.35 M px; we target the lower bound to keep tile
-// counts small. Pages already below 3 M px are still upscaled so the model's
-// receptive field assumptions hold.
-const MINIMUM_PIXELS = 3_000_000;
-const MAXIMUM_PIXELS = 3_000_000;
-const TARGET_PIXELS = 3_000_000;
+// 1 M px — well under oemer's 3 M px training floor. This is a speed/accuracy
+// knob: lower is faster (fewer tiles) but shrinks notation relative to the
+// model's receptive field, so very small symbols start to be missed. Raise it
+// back toward 3 M px to recover accuracy at the cost of speed.
+const MINIMUM_PIXELS = 1_000_000;
+const MAXIMUM_PIXELS = 1_000_000;
+const TARGET_PIXELS = 1_000_000;
 
 /**
  * Rescale `image` so its pixel count lands in oemer's training band. Returns the

@@ -9,13 +9,14 @@ min/page WebGPU segmentation pass. Freezing the input to a concrete shape lets
 onnxsim constant-fold that machinery away, leaving (almost) only ops the WebGPU
 EP runs on device.
 
-This is a one-time, out-of-band ONNX->ONNX transform (run via
-`make optimize-models`) — the bridge between the downloaded oemer originals and
-the served weights, mirroring how `make upload-models` works rather than being
-part of the per-build path. It rewrites each `public/models/*.onnx` in place,
-but only after asserting the optimized graph is numerically identical to the
-original on random input, so a deploy can never silently serve different
-predictions.
+This is the one-time, out-of-band ONNX->ONNX transform (run via
+`make optimize-models`) that turns the downloaded oemer originals into the served
+`v2` weights — the only change applied to them. It rewrites each
+`public/models/*.onnx` in place, but only after asserting the optimized graph is
+numerically *identical* to the original on random input, so the served weights
+produce bit-for-bit the same predictions as the public oemer release. The served
+weights stay full fp32 (an fp16 conversion was tried and reverted — it regressed
+WebGPU; see docs/model-optimization-plan.md and docs/model-weights.md).
 
 A fixed batch is what unlocks the fold: leaving the batch dim dynamic folds
 almost nothing, because the shape subgraphs are batch-dependent. We bake batch
@@ -24,7 +25,7 @@ full window, so a static shape is always valid, every dispatch stays small
 (immune to both backends' big-batch failures), and the WebGPU pipeline cache
 needs only one compiled kernel per op.
 
-See docs/model-optimization-plan.md.
+See docs/model-weights.md (what produces v2) and docs/model-optimization-plan.md.
 
 Requires: onnx, onnxsim, onnxruntime, numpy (installed in the `python` Docker
 service by `make optimize-models`).
