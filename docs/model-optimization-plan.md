@@ -65,7 +65,21 @@ some OMR accuracy for speed, the pixel budget was dropped from 3 M px to
 scale, so small symbols start to be missed; the budget is the main
 speed/accuracy knob (raise back toward 3 M px to recover accuracy). This is the
 surest WebGPU lever — pure compute reduction, no dependence on ORT-web fp16
-kernel coverage. Measure the new wall-clock via `make dev`.
+kernel coverage. Measured wall-clock on a real page: **35.8 s → ~15 s** (20 + 20
+tiles, per-tile cost unchanged at ~243 / ~494 ms — the models are now the wall).
+
+**Resolution validated by `make compare-resolutions` (2026-06-18).** The headless
+harness ran the real `v2` pipeline at a 3 M px reference and lower budgets over
+two real pages (a 9-staff and a 10-staff piano score) and compared the detected
+staff structure. Staff detection held to **1 M px** on both pages — same staff
+count, stafflines within **≤0.1 interline units** of the 3 M px reference. The
+first failure was at **0.75 M px**, where the denser 9-staff page lost a staff
+(8 vs 9); the 10-staff page still passed. So **1 M px is both safe and the floor**
+for a global default — 0.75 M px starts dropping staves on busy pages. (Mask IoU
+is reported too but is informational and dominated by thin-line resampling jitter
+unless dilated; staff structure is the trustworthy signal.) Net: the resolution
+lever is tapped out at 1 M px; further speedup would need the model-level levers
+below, which the project is avoiding.
 
 **Parallel-workers experiment (tried and reverted):** Running the two models
 in separate workers to overlap GPU dispatch showed that the GPU is the wall.
