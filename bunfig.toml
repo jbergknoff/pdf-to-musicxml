@@ -1,0 +1,4 @@
+[test]
+# Editor tests render Preact components into a linkedom DOM; the setup file
+# installs DOMParser/document/window globals before the suite runs.
+preload = ["./editor/src/test-setup.ts"]

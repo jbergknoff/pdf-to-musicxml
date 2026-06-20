@@ -6,8 +6,25 @@ on:
   pull_request:
 
 jobs:
-  ci:
+  # The editor app (editor/), built/tested with the root tooling.
+  editor:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pull Docker images
+        run: docker compose pull --quiet main
+      - name: Build and test
+        run: make pr-ready
+      - run: git diff --exit-code
+      - run: make down
+
+  # The original pdf-to-musicxml OMR pipeline, self-contained under
+  # import-image/ with its own Makefile and docker-compose.
+  import-image:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: import-image
     steps:
       - uses: actions/checkout@v4
       - name: Pull Docker images

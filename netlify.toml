@@ -1,9 +1,16 @@
+# Netlify still deploys the import-image app (the original pdf-to-musicxml OMR
+# pipeline), which now lives under import-image/ after the monorepo reorg. The
+# `base` directory points Netlify at it, so its build, publish dir, and
+# functions resolve exactly as before — the deploy is unchanged byte-for-byte.
+#
+# The editor (editor/) is set up to build (`make build-editor` at the repo
+# root) but its deploy is intentionally NOT wired yet: it has not been verified
+# in production. To flip the deploy to the editor once it's tested, drop the
+# `base` line, set `command = "make build-editor"` and `publish = "editor"`,
+# point `[functions]` away (or remove it), and drop the COOP/COEP headers (the
+# editor needs no SharedArrayBuffer / cross-origin isolation).
 [build]
-  # The model weights are NOT handled by the build. They are uploaded once, out
-  # of band, to Netlify Blobs with the Netlify CLI (`make upload-models`); the
-  # models function (netlify/functions/models.mts) streams them back same-origin
-  # at /models/<file> (required under COEP). Deploy-time upload of the ~109 MB
-  # was too slow.
+  base = "import-image"
   command = "make build"
   publish = "dist"
 
@@ -15,7 +22,7 @@
 
 # ORT Web's threaded WASM backend needs SharedArrayBuffer, which the browser
 # only exposes to cross-origin-isolated pages. Mirror the COOP/COEP headers the
-# dev server sets (scripts/serve.ts) so production behaves the same.
+# dev server sets (import-image/scripts/serve.ts) so production behaves the same.
 [[headers]]
   for = "/*"
   [headers.values]

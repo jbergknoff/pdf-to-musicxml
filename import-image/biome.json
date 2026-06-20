@@ -1,6 +1,6 @@
 {
   "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
-  "files": { "ignore": ["import-image/**", "**/dist/**", ".netlify/**"] },
+  "files": { "ignore": ["dist/"] },
   "organizeImports": { "enabled": true },
   "linter": {
     "enabled": true,
