@@ -1,11 +1,14 @@
 /**
  * Assembles a minimal, valid MusicXML 3.1 document from a flat list of
- * NoteEvents. Phase 3 target: one part, one staff, one voice, C major, 4/4.
+ * NoteEvents: one part, one staff, one voice. The opening clef, key, and time
+ * signature come from the optional `BuildOptions.attributes` (recovered per
+ * staff by `decode-attributes.ts`), each defaulting to treble / C major / 4/4
+ * when TrOMR did not emit the symbol.
  *
  * Durations are expressed in divisions where one quarter note = 4 divisions,
  * giving clean integer values for all standard subdivisions down to 32nd notes.
  */
-import type { NoteEvent } from "../types";
+import type { NoteEvent, ScoreAttributes } from "../types";
 
 /** Quarter note = 4 divisions; must divide all supported duration values. */
 const DIVISIONS = 4;
@@ -113,22 +116,37 @@ function noteXml(
     .join("\n");
 }
 
+// Defaults used when TrOMR did not recover the corresponding attribute.
+const DEFAULT_FIFTHS = 0; // C major / A minor
+const DEFAULT_BEATS = 4;
+const DEFAULT_BEAT_TYPE = 4;
+const DEFAULT_CLEF = { sign: "G", line: 2 }; // treble
+
+function attributesXml(attributes: ScoreAttributes): string {
+  const fifths = attributes.keyFifths ?? DEFAULT_FIFTHS;
+  const beats = attributes.time?.beats ?? DEFAULT_BEATS;
+  const beatType = attributes.time?.beatType ?? DEFAULT_BEAT_TYPE;
+  const clef = attributes.clef ?? DEFAULT_CLEF;
+  return [
+    "<attributes>",
+    `  <divisions>${DIVISIONS}</divisions>`,
+    `  <key><fifths>${fifths}</fifths></key>`,
+    `  <time><beats>${beats}</beats><beat-type>${beatType}</beat-type></time>`,
+    `  <clef><sign>${escapeXml(clef.sign)}</sign><line>${clef.line}</line></clef>`,
+    "</attributes>",
+  ].join("\n");
+}
+
 function measureXml(
   notes: NoteEvent[],
   measureNumber: number,
   isFirstMeasure: boolean,
+  attributes: ScoreAttributes,
 ): string {
   const children: string[] = [];
 
   if (isFirstMeasure) {
-    children.push(
-      "<attributes>",
-      `  <divisions>${DIVISIONS}</divisions>`,
-      "  <key><fifths>0</fifths></key>",
-      "  <time><beats>4</beats><beat-type>4</beat-type></time>",
-      "  <clef><sign>G</sign><line>2</line></clef>",
-      "</attributes>",
-    );
+    children.push(attributesXml(attributes));
   }
 
   // If the measure is empty, emit a whole-measure rest to keep MusicXML valid.
@@ -150,11 +168,23 @@ function measureXml(
   return `  <measure number="${measureNumber}">\n${indent}\n  </measure>`;
 }
 
+export interface BuildOptions {
+  /** Opening clef/key/time for the part; each field defaults when omitted. */
+  attributes?: ScoreAttributes;
+  /** `<part-name>` for the single part. */
+  partName?: string;
+}
+
 /**
  * Build a complete MusicXML 3.1 document from a flat list of note events.
  * Returns a UTF-8 XML string suitable for feeding to OSMD or writing to disk.
  */
-export function buildMusicXML(notes: NoteEvent[], partName = "Music"): string {
+export function buildMusicXML(
+  notes: NoteEvent[],
+  options: BuildOptions = {},
+): string {
+  const attributes = options.attributes ?? {};
+  const partName = options.partName ?? "Music";
   // Group notes by measure. Use the maximum measureIndex rather than the last
   // note's: when notes are concatenated across staves (each staff numbering its
   // own measures from 0), an earlier staff can hold a higher measureIndex than
@@ -175,7 +205,7 @@ export function buildMusicXML(notes: NoteEvent[], partName = "Music"): string {
   }
 
   const measures = byMeasure.map((notesInMeasure, index) =>
-    measureXml(notesInMeasure, index + 1, index === 0),
+    measureXml(notesInMeasure, index + 1, index === 0, attributes),
   );
 
   return [

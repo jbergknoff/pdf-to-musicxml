@@ -111,14 +111,26 @@ Phase 3 transcription + MusicXML assembly:
   with `chord: true` (and the same measure index). Durations cover whole through
   32nd (dotted variants included); barline tokens increment `measureIndex`;
   grace notes, tuplets, and unsupported tokens are skipped.
+- `lib/transcription/decode-attributes.ts` — `decodeAttributes` reads the
+  *leading* clef / key / time tokens that precede a staff's first note into a
+  `ScoreAttributes` (the decoder skips them). Clefs parse as sign+line
+  (`clef_F4` → `{sign:"F", line:4}`); key signatures as a fifths count
+  (`keySignature_-2` → −2); time signatures as a **numerator/denominator pair**
+  of consecutive `timeSignature/N` tokens (`timeSignature/6`,`timeSignature/8` →
+  6/8) — an unpaired/ambiguous run is left unset. Scanning stops at the first
+  note/rest, so mid-staff changes are out of scope for now.
 - `lib/transcription/transcribe.ts` — iterates over detected staves, calls
-  `runTrOMR` then `decodeTokens` for each, collects `Transcription` results
-  (including `rawRhythm` for the debug panel).
+  `runTrOMR`, then `decodeTokens` and `decodeAttributes` for each, collecting
+  `Transcription` results (`rawRhythm` for the debug panel, `attributes` for the
+  opening clef/key/time).
 - `lib/assembly/musicxml-builder.ts` — assembles MusicXML 3.1 from a flat
   `NoteEvent[]`. Notes with `chord: true` get `<chord/>` before `<pitch>` so
   OSMD stacks them at the same time position. Empty measures get a whole-measure
   rest. Measure count is derived from the maximum `measureIndex` (not the last
   note's), since notes concatenated across staves each renumber measures from 0.
+  The first measure's `<attributes>` come from the optional `BuildOptions.attributes`
+  (the first staff's recovered clef/key/time), each field defaulting to treble /
+  C major / 4/4 when TrOMR did not emit it.
 - `lib/assembly/combine-pages.ts` — `combinePages` concatenates the per-page
   note streams of a multi-page score, offsetting each page's `measureIndex` past
   the measures of earlier pages so the combined document has one continuous

@@ -121,6 +121,23 @@ export interface NoteEvent {
 }
 
 /**
+ * The leading score attributes recovered from one staff's token stream: the
+ * opening clef, key signature, and time signature that precede its first note.
+ * Every field is optional — TrOMR may not emit a given symbol, in which case the
+ * builder falls back to its defaults (treble clef, C major, 4/4). Mid-staff
+ * changes (a later clef or key change) are out of scope; only the opening
+ * attributes are captured.
+ */
+export interface ScoreAttributes {
+  /** Clef sign ("G"/"F"/"C") and staff line it sits on (1 = bottom line). */
+  clef?: { sign: string; line: number };
+  /** Key signature as a fifths count: negative = flats, positive = sharps. */
+  keyFifths?: number;
+  /** Time signature numerator (`beats`) over denominator (`beatType`). */
+  time?: { beats: number; beatType: number };
+}
+
+/**
  * The fully decoded transcription of one staff: all note events in order,
  * segmented by the barline tokens TrOMR emitted. `rawRhythm` holds the
  * decoder's rhythm token strings (before note/rest filtering) for inspection.
@@ -129,4 +146,6 @@ export interface Transcription {
   notes: NoteEvent[];
   measureCount: number;
   rawRhythm: string[];
+  /** Leading clef/key/time recovered from this staff's tokens. */
+  attributes: ScoreAttributes;
 }

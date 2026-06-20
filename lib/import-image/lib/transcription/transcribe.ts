@@ -4,6 +4,7 @@
  * all note events.
  */
 import type { RgbaImage, Staff, Transcription } from "../types";
+import { decodeAttributes } from "./decode-attributes";
 import { decodeTokens } from "./decode-tokens";
 import type { TrOMRSessions } from "./tromr-session";
 import { runTrOMR } from "./tromr-session";
@@ -29,10 +30,11 @@ export async function transcribeStaves(
   for (let index = 0; index < staves.length; index++) {
     const tokens = await runTrOMR(sessions, image, staves[index]);
     const notes = decodeTokens(tokens.rhythm, tokens.pitch, tokens.lift);
+    const attributes = decodeAttributes(tokens.rhythm);
     const measureCount =
       notes.length === 0 ? 0 : notes[notes.length - 1].measureIndex + 1;
     const rawRhythm = tokens.rhythm.map((id) => RHYTHM_VOCAB[id] ?? `?${id}`);
-    results.push({ notes, measureCount, rawRhythm });
+    results.push({ notes, measureCount, rawRhythm, attributes });
     options.onProgress?.(index + 1, staves.length);
   }
   return results;

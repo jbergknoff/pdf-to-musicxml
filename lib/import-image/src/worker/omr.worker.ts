@@ -205,7 +205,10 @@ async function process(
       },
     );
     const allNotes = transcriptions.flatMap((t) => t.notes);
-    musicXml = buildMusicXML(allNotes);
+    // Open the part with the first staff's recovered clef/key/time.
+    musicXml = buildMusicXML(allNotes, {
+      attributes: transcriptions[0]?.attributes,
+    });
     console.info(
       `[omr] ${image.width}x${image.height} via ${backend.provider}: ` +
         `segment ${Math.round(segmentMs)}ms, ` +

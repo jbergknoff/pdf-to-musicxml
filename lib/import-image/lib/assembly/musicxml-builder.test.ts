@@ -136,4 +136,39 @@ describe("buildMusicXML", () => {
     expect(xml.indexOf("<clef>")).toBeLessThan(firstMeasureEnd);
     expect(secondMeasureContent).not.toContain("<clef>");
   });
+
+  it("defaults to treble clef, C major, and 4/4 when no attributes are given", () => {
+    const xml = buildMusicXML([note("C4", "quarter")]);
+    expect(xml).toContain("<sign>G</sign><line>2</line>");
+    expect(xml).toContain("<fifths>0</fifths>");
+    expect(xml).toContain("<beats>4</beats><beat-type>4</beat-type>");
+  });
+
+  it("emits a supplied clef, key, and time signature", () => {
+    const xml = buildMusicXML([note("C3", "quarter")], {
+      attributes: {
+        clef: { sign: "F", line: 4 },
+        keyFifths: -2,
+        time: { beats: 6, beatType: 8 },
+      },
+    });
+    expect(xml).toContain("<sign>F</sign><line>4</line>");
+    expect(xml).toContain("<fifths>-2</fifths>");
+    expect(xml).toContain("<beats>6</beats><beat-type>8</beat-type>");
+  });
+
+  it("fills in defaults for attribute fields that are absent", () => {
+    // Only the key was recovered; clef and time fall back to defaults.
+    const xml = buildMusicXML([note("C4", "quarter")], {
+      attributes: { keyFifths: 1 },
+    });
+    expect(xml).toContain("<fifths>1</fifths>");
+    expect(xml).toContain("<sign>G</sign><line>2</line>");
+    expect(xml).toContain("<beats>4</beats><beat-type>4</beat-type>");
+  });
+
+  it("accepts a custom part name via options", () => {
+    const xml = buildMusicXML([note("C4", "quarter")], { partName: "Piano" });
+    expect(xml).toContain("<part-name>Piano</part-name>");
+  });
 });

@@ -14,7 +14,7 @@
  */
 import { combinePages } from "./lib/assembly/combine-pages";
 import { buildMusicXML } from "./lib/assembly/musicxml-builder";
-import type { NoteEvent } from "./lib/types";
+import type { NoteEvent, ScoreAttributes } from "./lib/types";
 import { decodeFilePages, isPdf } from "./src/input/decode";
 import { createOmrClient } from "./src/worker/omr-client";
 import type { BackendChoice, ProgressUpdate } from "./src/worker/protocol";
@@ -60,6 +60,8 @@ export async function createImageImporter(
       // multi-page PDF yields one raster per page; a raster image yields one.
       const pages = await decodeFilePages(file);
       const pageNotes: NoteEvent[][] = [];
+      // Open the document with the first recognized staff's clef/key/time.
+      let attributes: ScoreAttributes | undefined;
       for (let page = 0; page < pages.length; page++) {
         const result = await client.process(pages[page], (update) => {
           onProgress?.(
@@ -69,6 +71,7 @@ export async function createImageImporter(
           );
         });
         pageNotes.push(result.transcriptions.flatMap((t) => t.notes));
+        attributes ??= result.transcriptions[0]?.attributes;
       }
       // Stitch the per-page note streams into one continuous-measure document.
       // A single page round-trips identically to the worker's own musicXml,
@@ -76,7 +79,7 @@ export async function createImageImporter(
       // worker's empty-string contract (nothing recognized) so callers can tell
       // a failed import from a one-rest document.
       const notes = combinePages(pageNotes);
-      return notes.length === 0 ? "" : buildMusicXML(notes);
+      return notes.length === 0 ? "" : buildMusicXML(notes, { attributes });
     },
     dispose() {
       client.dispose();
