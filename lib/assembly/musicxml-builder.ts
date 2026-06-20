@@ -73,6 +73,7 @@ function noteXml(
   if (note.pitch === "rest") {
     return [
       "<note>",
+      note.chord ? "  <chord/>" : "",
       "  <rest/>",
       `  <duration>${dottedDivisions}</duration>`,
       `  <type>${type}</type>`,
@@ -96,6 +97,7 @@ function noteXml(
 
   return [
     "<note>",
+    note.chord ? "  <chord/>" : "",
     "  <pitch>",
     `    <step>${escapeXml(STEP_FROM_PITCH[step] ?? step)}</step>`,
     alter !== undefined ? `    <alter>${alter}</alter>` : "",

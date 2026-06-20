@@ -215,4 +215,53 @@ describe("decodeTokens", () => {
     expect(result[0].pitch).toBe("rest");
     expect(result[0].duration).toBe("whole");
   });
+
+  it("decodes chord tokens as simultaneous notes sharing the preceding duration", () => {
+    const note4 = indexOf(RHYTHM_VOCAB, "note_4");
+    const chord = indexOf(RHYTHM_VOCAB, "chord");
+    const pitchC4 = indexOf(PITCH_VOCAB, "C4");
+    const pitchE4 = indexOf(PITCH_VOCAB, "E4");
+    const pitchG4 = indexOf(PITCH_VOCAB, "G4");
+    const noAcc = indexOf(LIFT_VOCAB, "_");
+    const nonote = NONOTE;
+
+    // C major chord: note_4(C4) chord(E4) chord(G4)
+    const result = decodeTokens(
+      [note4, chord, chord, EOS],
+      [pitchC4, pitchE4, pitchG4, nonote],
+      [noAcc, noAcc, noAcc, nonote],
+    );
+
+    expect(result).toHaveLength(3);
+    expect(result[0].pitch).toBe("C4");
+    expect(result[0].chord).toBe(false);
+    expect(result[0].duration).toBe("quarter");
+    expect(result[1].pitch).toBe("E4");
+    expect(result[1].chord).toBe(true);
+    expect(result[1].duration).toBe("quarter");
+    expect(result[2].pitch).toBe("G4");
+    expect(result[2].chord).toBe(true);
+    expect(result[2].duration).toBe("quarter");
+  });
+
+  it("chord note measureIndex matches the preceding note", () => {
+    const note4 = indexOf(RHYTHM_VOCAB, "note_4");
+    const chord = indexOf(RHYTHM_VOCAB, "chord");
+    const barline = indexOf(RHYTHM_VOCAB, "barline");
+    const pitchC4 = indexOf(PITCH_VOCAB, "C4");
+    const pitchE4 = indexOf(PITCH_VOCAB, "E4");
+    const noAcc = indexOf(LIFT_VOCAB, "_");
+    const nonote = NONOTE;
+
+    const result = decodeTokens(
+      [note4, barline, note4, chord, EOS],
+      [pitchC4, nonote, pitchC4, pitchE4, nonote],
+      [noAcc, nonote, noAcc, noAcc, nonote],
+    );
+
+    expect(result).toHaveLength(3);
+    expect(result[0].measureIndex).toBe(0);
+    expect(result[1].measureIndex).toBe(1);
+    expect(result[2].measureIndex).toBe(1);
+  });
 });

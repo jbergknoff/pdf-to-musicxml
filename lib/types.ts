@@ -116,6 +116,8 @@ export interface NoteEvent {
     | "thirty_second";
   dotted: boolean;
   measureIndex: number;
+  /** True when this note is simultaneous with the preceding note (MusicXML `<chord/>`). */
+  chord: boolean;
 }
 
 /**

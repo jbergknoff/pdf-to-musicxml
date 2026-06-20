@@ -14,6 +14,7 @@ function note(
     dotted: false,
     accidental: "natural",
     measureIndex,
+    chord: false,
     ...extra,
   };
 }
@@ -107,6 +108,21 @@ describe("buildMusicXML", () => {
       note("F4", "quarter", 0),
     ]);
     expect(xml).toContain('measure number="3"');
+  });
+
+  it("emits <chord/> before <pitch> for chord notes", () => {
+    const xml = buildMusicXML([
+      note("C4", "quarter", 0),
+      note("E4", "quarter", 0, { chord: true }),
+      note("G4", "quarter", 0, { chord: true }),
+    ]);
+    // The second and third notes must carry <chord/>
+    const chordOccurrences = (xml.match(/<chord\/>/g) ?? []).length;
+    expect(chordOccurrences).toBe(2);
+    // <chord/> must appear before <pitch> within each chord note
+    const firstChordPos = xml.indexOf("<chord/>");
+    const firstPitchAfterChord = xml.indexOf("<pitch>", firstChordPos);
+    expect(firstPitchAfterChord).toBeGreaterThan(firstChordPos);
   });
 
   it("does not include attributes on subsequent measures", () => {

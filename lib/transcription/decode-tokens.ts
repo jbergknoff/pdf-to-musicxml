@@ -103,6 +103,8 @@ export function decodeTokens(
 ): NoteEvent[] {
   const notes: NoteEvent[] = [];
   let measureIndex = 0;
+  let lastDuration: DurationValue = "quarter";
+  let lastDotted = false;
 
   for (let i = 0; i < rhythmIds.length; i++) {
     const rhythmId = rhythmIds[i];
@@ -120,8 +122,28 @@ export function decodeTokens(
       continue;
     }
 
+    // Chord token: emit the current index's pitch/lift as a note simultaneous
+    // with the previous one, inheriting its duration.
+    if (rhythmToken === "chord") {
+      const pitchToken = PITCH_VOCAB[pitchIds[i]] ?? ".";
+      const liftToken = LIFT_VOCAB[liftIds[i]] ?? ".";
+      if (pitchToken !== "." && pitchToken !== "_") {
+        const accidental: AccidentalValue =
+          LIFT_TO_ACCIDENTAL[liftToken] ?? null;
+        notes.push({
+          pitch: pitchToken,
+          accidental,
+          duration: lastDuration,
+          dotted: lastDotted,
+          measureIndex,
+          chord: true,
+        });
+      }
+      continue;
+    }
+
     if (!rhythmToken.startsWith("note_") && !rhythmToken.startsWith("rest_")) {
-      // Chord, clef, key/time signature, volta, etc. — skip silently.
+      // Clef, key/time signature, volta, etc. — skip silently.
       continue;
     }
 
@@ -142,12 +164,16 @@ export function decodeTokens(
 
     const accidental: AccidentalValue = LIFT_TO_ACCIDENTAL[liftToken] ?? null;
 
+    lastDuration = parsed.duration;
+    lastDotted = parsed.dotted;
+
     notes.push({
       pitch,
       accidental,
       duration: parsed.duration,
       dotted: parsed.dotted,
       measureIndex,
+      chord: false,
     });
   }
 
