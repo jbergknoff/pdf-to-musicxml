@@ -171,4 +171,35 @@ describe("buildMusicXML", () => {
     const xml = buildMusicXML([note("C4", "quarter")], { partName: "Piano" });
     expect(xml).toContain("<part-name>Piano</part-name>");
   });
+
+  it("emits a partial <attributes> before a note carrying a mid-staff change", () => {
+    const xml = buildMusicXML([
+      note("C4", "quarter", 0),
+      note("C3", "quarter", 0, {
+        attributeChange: { clef: { sign: "F", line: 4 } },
+      }),
+    ]);
+    // The change is a partial attributes block: clef only, no divisions/key/time.
+    const changeIndex = xml.indexOf("<sign>F</sign><line>4</line>");
+    expect(changeIndex).toBeGreaterThan(-1);
+    const changeBlock = xml.slice(
+      xml.lastIndexOf("<attributes>"),
+      xml.indexOf("</attributes>", changeIndex) + "</attributes>".length,
+    );
+    expect(changeBlock).not.toContain("<divisions>");
+    expect(changeBlock).not.toContain("<key>");
+    expect(changeBlock).not.toContain("<time>");
+  });
+
+  it("places a mid-measure change before its note, after the prior note", () => {
+    const xml = buildMusicXML([
+      note("C4", "quarter", 0),
+      note("D4", "quarter", 0, { attributeChange: { keyFifths: 3 } }),
+    ]);
+    const firstNoteEnd = xml.indexOf("</note>");
+    const changeIndex = xml.indexOf("<fifths>3</fifths>");
+    const secondNoteIndex = xml.indexOf("<step>D</step>");
+    expect(changeIndex).toBeGreaterThan(firstNoteEnd);
+    expect(changeIndex).toBeLessThan(secondNoteIndex);
+  });
 });

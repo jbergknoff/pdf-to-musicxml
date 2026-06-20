@@ -9,14 +9,23 @@
  *   - "rest_Nm"      → a multi-measure rest (mapped to one whole rest)
  *   - "barline" / "doublebarline" / ... → increment measure index
  *   - "chord"        → note simultaneous with the previous one (kept as-is)
+ *   - clef / key / time tokens → a mid-staff attribute change, accumulated and
+ *     attached to the *following* note as `attributeChange` (the opening run
+ *     before the first note is left to `decodeAttributes`)
  *   - "EOS" / "PAD"  → stop
- *   - anything else  → skip (clefs, key/time signatures, volta brackets, ...)
+ *   - anything else  → skip (volta brackets, ...)
  *
  * Pitch tokens use "C4", "D5", etc. Lift tokens use "#", "##", "N", "b",
  * "bb", "_" (no accidental), or "." (nonote). Each rhythm token consumes one
  * corresponding pitch and lift token at the same index.
  */
-import type { NoteEvent } from "../types";
+import type { NoteEvent, ScoreAttributes } from "../types";
+import {
+  parseClefToken,
+  parseKeyToken,
+  parseTimeToken,
+  resolveTime,
+} from "./decode-attributes";
 import { EOS, LIFT_VOCAB, PAD, PITCH_VOCAB, RHYTHM_VOCAB } from "./vocabulary";
 
 type DurationValue = NoteEvent["duration"];
@@ -108,6 +117,16 @@ export function decodeTokens(
   // the chord member's pitch comes with the following note_X token.
   let nextNoteIsChord = false;
 
+  // Clef/key/time tokens seen since the last note accumulate here and attach to
+  // the next note as a mid-staff `attributeChange`. The run before the first
+  // note is the staff's opening attributes (handled by `decodeAttributes`), so
+  // it is consumed but not attached. First value within a run wins, matching
+  // `decodeAttributes`.
+  let firstNoteEmitted = false;
+  let pendingClef: ScoreAttributes["clef"] | undefined;
+  let pendingKeyFifths: number | undefined;
+  let pendingTimeNumbers: number[] = [];
+
   for (let i = 0; i < rhythmIds.length; i++) {
     const rhythmId = rhythmIds[i];
     const rhythmToken = RHYTHM_VOCAB[rhythmId] ?? "";
@@ -131,7 +150,28 @@ export function decodeTokens(
     }
 
     if (!rhythmToken.startsWith("note_") && !rhythmToken.startsWith("rest_")) {
-      // Clef, key/time signature, volta, etc. — skip silently.
+      // Accumulate clef/key/time changes for the next note; skip everything else
+      // (volta brackets, etc.). Persists across barlines, so a key change at the
+      // start of a measure attaches to that measure's first note.
+      if (rhythmToken.startsWith("clef_") && pendingClef === undefined) {
+        const clef = parseClefToken(rhythmToken);
+        if (clef !== null) {
+          pendingClef = clef;
+        }
+      } else if (
+        rhythmToken.startsWith("keySignature_") &&
+        pendingKeyFifths === undefined
+      ) {
+        const fifths = parseKeyToken(rhythmToken);
+        if (fifths !== null) {
+          pendingKeyFifths = fifths;
+        }
+      } else if (rhythmToken.startsWith("timeSignature/")) {
+        const number = parseTimeToken(rhythmToken);
+        if (number !== null) {
+          pendingTimeNumbers.push(number);
+        }
+      }
       continue;
     }
 
@@ -156,14 +196,41 @@ export function decodeTokens(
     const isChord = nextNoteIsChord;
     nextNoteIsChord = false;
 
-    notes.push({
+    // Resolve the attribute tokens accumulated since the last note. The opening
+    // run (before the first note) is consumed here but not attached — it belongs
+    // to the document's opening attributes, not a mid-staff change.
+    const change: ScoreAttributes = {};
+    if (pendingClef !== undefined) {
+      change.clef = pendingClef;
+    }
+    if (pendingKeyFifths !== undefined) {
+      change.keyFifths = pendingKeyFifths;
+    }
+    const pendingTime = resolveTime(pendingTimeNumbers);
+    if (pendingTime !== undefined) {
+      change.time = pendingTime;
+    }
+    const hasChange =
+      pendingClef !== undefined ||
+      pendingKeyFifths !== undefined ||
+      pendingTime !== undefined;
+    pendingClef = undefined;
+    pendingKeyFifths = undefined;
+    pendingTimeNumbers = [];
+
+    const note: NoteEvent = {
       pitch,
       accidental,
       duration: parsed.duration,
       dotted: parsed.dotted,
       measureIndex,
       chord: isChord,
-    });
+    };
+    if (firstNoteEmitted && hasChange) {
+      note.attributeChange = change;
+    }
+    firstNoteEmitted = true;
+    notes.push(note);
   }
 
   return notes;

@@ -137,6 +137,32 @@ function attributesXml(attributes: ScoreAttributes): string {
   ].join("\n");
 }
 
+/**
+ * A mid-measure clef/key/time change: a partial `<attributes>` carrying only the
+ * fields that changed (no `<divisions>`, no defaults), emitted before the note it
+ * takes effect on. Element order follows the MusicXML schema (key, time, clef).
+ */
+function attributeChangeXml(change: ScoreAttributes): string {
+  const lines = ["<attributes>"];
+  if (change.keyFifths !== undefined) {
+    lines.push(`  <key><fifths>${change.keyFifths}</fifths></key>`);
+  }
+  if (change.time !== undefined) {
+    lines.push(
+      `  <time><beats>${change.time.beats}</beats>` +
+        `<beat-type>${change.time.beatType}</beat-type></time>`,
+    );
+  }
+  if (change.clef !== undefined) {
+    lines.push(
+      `  <clef><sign>${escapeXml(change.clef.sign)}</sign>` +
+        `<line>${change.clef.line}</line></clef>`,
+    );
+  }
+  lines.push("</attributes>");
+  return lines.join("\n");
+}
+
 function measureXml(
   notes: NoteEvent[],
   measureNumber: number,
@@ -160,7 +186,12 @@ function measureXml(
     );
   } else {
     for (let index = 0; index < notes.length; index++) {
-      children.push(noteXml(notes[index], index === 0, measureNumber - 1));
+      const note = notes[index];
+      // A mid-staff clef/key/time change takes effect before this note.
+      if (note.attributeChange !== undefined) {
+        children.push(attributeChangeXml(note.attributeChange));
+      }
+      children.push(noteXml(note, index === 0, measureNumber - 1));
     }
   }
 

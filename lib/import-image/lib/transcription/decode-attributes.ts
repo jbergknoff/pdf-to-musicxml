@@ -1,11 +1,12 @@
 /**
- * Recovers the leading score attributes — clef, key signature, time signature —
- * from a staff's TrOMR rhythm token stream.
+ * Recovers score attributes — clef, key signature, time signature — from a
+ * staff's TrOMR rhythm token stream.
  *
- * These symbols precede the staff's first note. The decoder (`decode-tokens.ts`)
- * skips them so it can focus on note/rest events; this pass reads them so the
- * MusicXML builder can emit real opening attributes instead of hardcoded
- * treble / C major / 4/4.
+ * The *opening* attributes precede the staff's first note; `decodeAttributes`
+ * reads them so the MusicXML builder can emit real opening `<attributes>`
+ * instead of hardcoded treble / C major / 4/4. The same per-token parsers are
+ * reused by `decode-tokens.ts` to attach *mid-staff* attribute changes (a later
+ * clef or key change) to the note they precede.
  *
  * Token forms (see `vocabulary.ts`):
  *   - `clef_G2`, `clef_F4`, `clef_C3` — sign letter + staff line.
@@ -15,14 +16,12 @@
  *     `timeSignature/4`; 6/8 → `timeSignature/6`, `timeSignature/8`). The
  *     vocabulary's value set mixes typical numerators and denominators, which is
  *     why a pair is needed to pin down the meter.
- *
- * Only the *opening* attributes are captured: scanning stops at the first note,
- * rest, or barline, so a mid-staff clef or key change is left for later phases.
  */
 import type { ScoreAttributes } from "../types";
 import { RHYTHM_VOCAB } from "./vocabulary";
 
-function parseClef(token: string): ScoreAttributes["clef"] | null {
+/** Parse a `clef_G2`-style token into its sign and staff line, or null. */
+export function parseClefToken(token: string): ScoreAttributes["clef"] | null {
   const body = token.slice("clef_".length); // e.g. "G2"
   const sign = body[0];
   const line = Number(body.slice(1));
@@ -32,12 +31,37 @@ function parseClef(token: string): ScoreAttributes["clef"] | null {
   return null;
 }
 
-export function decodeAttributes(
-  rhythmIds: ArrayLike<number>,
-): ScoreAttributes {
+/** Parse a `keySignature_-2`-style token into a fifths count, or null. */
+export function parseKeyToken(token: string): number | null {
+  const fifths = Number(token.slice("keySignature_".length));
+  return Number.isInteger(fifths) ? fifths : null;
+}
+
+/** Parse one `timeSignature/N` token into its number, or null. */
+export function parseTimeToken(token: string): number | null {
+  const number = Number(token.slice("timeSignature/".length));
+  return Number.isInteger(number) ? number : null;
+}
+
+/**
+ * Resolve a run of `timeSignature/N` numbers into a meter. A well-formed time
+ * signature is exactly one numerator/denominator pair; anything else is
+ * ambiguous, so return undefined and let the caller default.
+ */
+export function resolveTime(numbers: number[]): ScoreAttributes["time"] {
+  if (numbers.length === 2) {
+    return { beats: numbers[0], beatType: numbers[1] };
+  }
+  return undefined;
+}
+
+/**
+ * Read the leading clef/key/time attributes that precede a staff's first note.
+ * Scanning stops at the first note, rest, or barline, so only the opening
+ * attributes are captured; mid-staff changes are handled in `decode-tokens.ts`.
+ */
+export function decodeAttributes(rhythmIds: ArrayLike<number>): ScoreAttributes {
   const attributes: ScoreAttributes = {};
-  // Time signatures arrive as a numerator/denominator pair of `timeSignature/N`
-  // tokens; collect the leading run and resolve it once scanning finishes.
   const timeNumbers: number[] = [];
 
   for (let index = 0; index < rhythmIds.length; index++) {
@@ -57,32 +81,30 @@ export function decodeAttributes(
     if (token.startsWith("clef_")) {
       // Keep the first clef; a later one would be a mid-staff change.
       if (attributes.clef === undefined) {
-        const clef = parseClef(token);
+        const clef = parseClefToken(token);
         if (clef !== null) {
           attributes.clef = clef;
         }
       }
     } else if (token.startsWith("keySignature_")) {
       if (attributes.keyFifths === undefined) {
-        const fifths = Number(token.slice("keySignature_".length));
-        if (Number.isInteger(fifths)) {
+        const fifths = parseKeyToken(token);
+        if (fifths !== null) {
           attributes.keyFifths = fifths;
         }
       }
     } else if (token.startsWith("timeSignature/")) {
-      const number = Number(token.slice("timeSignature/".length));
-      if (Number.isInteger(number)) {
+      const number = parseTimeToken(token);
+      if (number !== null) {
         timeNumbers.push(number);
       }
     }
     // Other leading tokens (volta brackets, etc.) are ignored.
   }
 
-  // A well-formed time signature is exactly one numerator/denominator pair.
-  // Anything else is ambiguous, so leave it unset and let the builder default.
-  if (timeNumbers.length === 2) {
-    attributes.time = { beats: timeNumbers[0], beatType: timeNumbers[1] };
+  const time = resolveTime(timeNumbers);
+  if (time !== undefined) {
+    attributes.time = time;
   }
-
   return attributes;
 }

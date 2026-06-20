@@ -293,4 +293,87 @@ describe("decodeTokens", () => {
     expect(result[2].measureIndex).toBe(1);
     expect(result[2].chord).toBe(true);
   });
+
+  it("does not attach the opening attributes as a mid-staff change", () => {
+    const clef = indexOf(RHYTHM_VOCAB, "clef_G2");
+    const note4 = indexOf(RHYTHM_VOCAB, "note_4");
+    const pitchC4 = indexOf(PITCH_VOCAB, "C4");
+    const noAcc = indexOf(LIFT_VOCAB, "_");
+
+    const result = decodeTokens(
+      [clef, note4, EOS],
+      [NONOTE, pitchC4, EOS],
+      [NONOTE, noAcc, EOS],
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0].attributeChange).toBeUndefined();
+  });
+
+  it("attaches a mid-staff clef change to the following note", () => {
+    const note4 = indexOf(RHYTHM_VOCAB, "note_4");
+    const clefF4 = indexOf(RHYTHM_VOCAB, "clef_F4");
+    const pitchC4 = indexOf(PITCH_VOCAB, "C4");
+    const noAcc = indexOf(LIFT_VOCAB, "_");
+
+    const result = decodeTokens(
+      [note4, clefF4, note4, EOS],
+      [pitchC4, NONOTE, pitchC4, EOS],
+      [noAcc, NONOTE, noAcc, EOS],
+    );
+    expect(result).toHaveLength(2);
+    expect(result[0].attributeChange).toBeUndefined();
+    expect(result[1].attributeChange).toEqual({ clef: { sign: "F", line: 4 } });
+  });
+
+  it("attaches a key change at a measure start to that measure's first note", () => {
+    const note4 = indexOf(RHYTHM_VOCAB, "note_4");
+    const barline = indexOf(RHYTHM_VOCAB, "barline");
+    const keySig = indexOf(RHYTHM_VOCAB, "keySignature_2");
+    const pitchC4 = indexOf(PITCH_VOCAB, "C4");
+    const noAcc = indexOf(LIFT_VOCAB, "_");
+
+    // The key signature appears after the barline but before the next note, so
+    // the pending change must survive the barline.
+    const result = decodeTokens(
+      [note4, barline, keySig, note4, EOS],
+      [pitchC4, NONOTE, NONOTE, pitchC4, EOS],
+      [noAcc, NONOTE, NONOTE, noAcc, EOS],
+    );
+    expect(result).toHaveLength(2);
+    expect(result[1].measureIndex).toBe(1);
+    expect(result[1].attributeChange).toEqual({ keyFifths: 2 });
+  });
+
+  it("attaches a mid-staff time-signature change to the following note", () => {
+    const note4 = indexOf(RHYTHM_VOCAB, "note_4");
+    const timeTop = indexOf(RHYTHM_VOCAB, "timeSignature/3");
+    const timeBottom = indexOf(RHYTHM_VOCAB, "timeSignature/4");
+    const pitchC4 = indexOf(PITCH_VOCAB, "C4");
+    const noAcc = indexOf(LIFT_VOCAB, "_");
+
+    const result = decodeTokens(
+      [note4, timeTop, timeBottom, note4, EOS],
+      [pitchC4, NONOTE, NONOTE, pitchC4, EOS],
+      [noAcc, NONOTE, NONOTE, noAcc, EOS],
+    );
+    expect(result).toHaveLength(2);
+    expect(result[1].attributeChange).toEqual({
+      time: { beats: 3, beatType: 4 },
+    });
+  });
+
+  it("drops a mid-staff change with no following note", () => {
+    const note4 = indexOf(RHYTHM_VOCAB, "note_4");
+    const clefF4 = indexOf(RHYTHM_VOCAB, "clef_F4");
+    const pitchC4 = indexOf(PITCH_VOCAB, "C4");
+    const noAcc = indexOf(LIFT_VOCAB, "_");
+
+    const result = decodeTokens(
+      [note4, clefF4, EOS],
+      [pitchC4, NONOTE, EOS],
+      [noAcc, NONOTE, EOS],
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0].attributeChange).toBeUndefined();
+  });
 });

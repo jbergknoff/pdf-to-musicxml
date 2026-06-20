@@ -118,6 +118,13 @@ export interface NoteEvent {
   measureIndex: number;
   /** True when this note is simultaneous with the preceding note (MusicXML `<chord/>`). */
   chord: boolean;
+  /**
+   * A clef/key/time change that takes effect immediately *before* this note (a
+   * mid-staff change, e.g. a modulation at a measure start or a clef change
+   * partway through). Only the changed fields are set. Absent on most notes; the
+   * staff's opening attributes are carried separately (see {@link ScoreAttributes}).
+   */
+  attributeChange?: ScoreAttributes;
 }
 
 /**

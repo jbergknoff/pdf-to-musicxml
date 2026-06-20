@@ -113,12 +113,19 @@ Phase 3 transcription + MusicXML assembly:
   grace notes, tuplets, and unsupported tokens are skipped.
 - `lib/transcription/decode-attributes.ts` — `decodeAttributes` reads the
   *leading* clef / key / time tokens that precede a staff's first note into a
-  `ScoreAttributes` (the decoder skips them). Clefs parse as sign+line
-  (`clef_F4` → `{sign:"F", line:4}`); key signatures as a fifths count
-  (`keySignature_-2` → −2); time signatures as a **numerator/denominator pair**
-  of consecutive `timeSignature/N` tokens (`timeSignature/6`,`timeSignature/8` →
-  6/8) — an unpaired/ambiguous run is left unset. Scanning stops at the first
-  note/rest, so mid-staff changes are out of scope for now.
+  `ScoreAttributes`. Clefs parse as sign+line (`clef_F4` → `{sign:"F", line:4}`);
+  key signatures as a fifths count (`keySignature_-2` → −2); time signatures as a
+  **numerator/denominator pair** of consecutive `timeSignature/N` tokens
+  (`timeSignature/6`,`timeSignature/8` → 6/8) — an unpaired/ambiguous run is left
+  unset. It also exports the per-token parsers (`parseClefToken`, `parseKeyToken`,
+  `parseTimeToken`, `resolveTime`) reused by `decode-tokens.ts`.
+  **Mid-staff changes:** a clef/key/time token that appears *after* the first
+  note is a mid-staff change. `decodeTokens` accumulates such tokens (across
+  barlines, so a key change at a measure start counts) and attaches them to the
+  *following* note as `NoteEvent.attributeChange` (only the changed fields). The
+  builder emits these as a partial `<attributes>` before that note. The opening
+  run (before the first note) is consumed but not attached — it is the document's
+  opening attributes. A change with no following note is dropped.
 - `lib/transcription/transcribe.ts` — iterates over detected staves, calls
   `runTrOMR`, then `decodeTokens` and `decodeAttributes` for each, collecting
   `Transcription` results (`rawRhythm` for the debug panel, `attributes` for the
