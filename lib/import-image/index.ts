@@ -12,7 +12,10 @@
  * the page must be cross-origin isolated (COOP/COEP) for ORT's threaded WASM
  * backend; see the root build script and netlify.toml.
  */
-import { decodeFile, isPdf } from "./src/input/decode";
+import { combinePages } from "./lib/assembly/combine-pages";
+import { buildMusicXML } from "./lib/assembly/musicxml-builder";
+import type { NoteEvent } from "./lib/types";
+import { decodeFilePages, isPdf } from "./src/input/decode";
 import { createOmrClient } from "./src/worker/omr-client";
 import type { BackendChoice, ProgressUpdate } from "./src/worker/protocol";
 
@@ -53,12 +56,27 @@ export async function createImageImporter(
     provider: client.provider,
     async importFile(file, onProgress) {
       // Decode on the main thread (pdf.js / createImageBitmap are DOM-bound),
-      // then hand the full-resolution raster to the worker for recognition.
-      const image = await decodeFile(file);
-      const result = await client.process(image, (update) => {
-        onProgress?.(update);
-      });
-      return result.musicXml;
+      // then hand each full-resolution page raster to the worker in turn. A
+      // multi-page PDF yields one raster per page; a raster image yields one.
+      const pages = await decodeFilePages(file);
+      const pageNotes: NoteEvent[][] = [];
+      for (let page = 0; page < pages.length; page++) {
+        const result = await client.process(pages[page], (update) => {
+          onProgress?.(
+            pages.length > 1
+              ? { ...update, page, pageCount: pages.length }
+              : update,
+          );
+        });
+        pageNotes.push(result.transcriptions.flatMap((t) => t.notes));
+      }
+      // Stitch the per-page note streams into one continuous-measure document.
+      // A single page round-trips identically to the worker's own musicXml,
+      // since both build from the same flattened note list. Preserve the
+      // worker's empty-string contract (nothing recognized) so callers can tell
+      // a failed import from a one-rest document.
+      const notes = combinePages(pageNotes);
+      return notes.length === 0 ? "" : buildMusicXML(notes);
     },
     dispose() {
       client.dispose();

@@ -64,7 +64,10 @@ Phase 1 segmentation (all of `lib/` is runtime-agnostic and unit-tested):
 - `src/models/registry.ts` — fetches the weights from `/models/` (same-origin,
   required under COEP) and caches them in Cache Storage.
 - `src/input/decode.ts` — File → `RgbaImage` (raster via `createImageBitmap`,
-  PDF first page via pdf.js).
+  PDF first page via pdf.js). `decodeFilePages` returns one raster *per* page —
+  every page of a multi-page PDF, or a single-element array for a raster image —
+  which the public `importFile` recognizes page by page (`decodeFile`, the
+  single-page form, still backs the standalone `App.tsx` preview).
 - `src/App.tsx` + `src/components/` — drop a score, run segmentation, overlay the
   masks with per-layer toggles.
 
@@ -116,6 +119,13 @@ Phase 3 transcription + MusicXML assembly:
   OSMD stacks them at the same time position. Empty measures get a whole-measure
   rest. Measure count is derived from the maximum `measureIndex` (not the last
   note's), since notes concatenated across staves each renumber measures from 0.
+- `lib/assembly/combine-pages.ts` — `combinePages` concatenates the per-page
+  note streams of a multi-page score, offsetting each page's `measureIndex` past
+  the measures of earlier pages so the combined document has one continuous
+  measure timeline. The public `importFile` (`index.ts`) drives the worker once
+  per decoded page, flattens each page's transcriptions to notes, combines them,
+  and builds a single MusicXML document (returning `""` when nothing was
+  recognized, matching the worker's empty-result contract).
 - `src/components/ScoreView.tsx` — renders MusicXML via OSMD and provides a
   download button for the `.musicxml` file.
 - `src/components/TranscriptionDebug.tsx` — collapsible per-staff panel showing

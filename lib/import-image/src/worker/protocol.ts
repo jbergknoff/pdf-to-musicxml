@@ -28,6 +28,14 @@ export interface ProgressUpdate {
   fraction: number;
   /** Extra context for the phase (e.g. the model file being loaded). */
   detail?: string;
+  /**
+   * 0-based index of the page being recognized, for multi-page PDFs. Set by the
+   * importer (the worker processes one page at a time and does not know the page
+   * count); absent for single-page inputs.
+   */
+  page?: number;
+  /** Total page count when recognizing a multi-page input; absent otherwise. */
+  pageCount?: number;
 }
 
 /** Posted once, after the worker resolves its inference backend. */

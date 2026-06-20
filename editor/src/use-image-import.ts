@@ -28,18 +28,23 @@ export function isImportableImage(file: File): boolean {
 
 /** Human-readable status line for a worker progress update. */
 function describeProgress(update: ProgressUpdate): string {
+  // Prefix multi-page imports with the page being recognized.
+  const prefix =
+    update.pageCount !== undefined && update.pageCount > 1
+      ? `Page ${(update.page ?? 0) + 1}/${update.pageCount}: `
+      : "";
   switch (update.phase) {
     case "loading-models": {
       return update.detail ? `Loading ${update.detail}…` : "Loading models…";
     }
     case "segmenting": {
-      return `Segmenting… ${Math.round(update.fraction * 100)}%`;
+      return `${prefix}Segmenting… ${Math.round(update.fraction * 100)}%`;
     }
     case "detecting-staves": {
-      return "Detecting staves…";
+      return `${prefix}Detecting staves…`;
     }
     case "transcribing": {
-      return `Transcribing… ${Math.round(update.fraction * 100)}%`;
+      return `${prefix}Transcribing… ${Math.round(update.fraction * 100)}%`;
     }
   }
 }

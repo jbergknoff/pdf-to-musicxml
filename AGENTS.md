@@ -28,9 +28,12 @@ lib/import-image/   The OMR pipeline (the original pdf-to-musicxml app), moved
 
 `createImageImporter()` → an `ImageImporter` whose `importFile(file, onProgress)`
 decodes a PDF/image on the main thread and runs segmentation → staff detection →
-TrOMR transcription in the OMR worker, returning a MusicXML string.
-`imageToMusicXml(file)` is the one-shot convenience. The editor wraps this in
-`editor/src/use-image-import.ts` and calls it from `Editor.tsx`'s Import handler.
+TrOMR transcription in the OMR worker, returning a MusicXML string. Multi-page
+PDFs are recognized a page at a time and stitched into one document (measure
+numbers run continuously across pages); progress updates carry `page`/`pageCount`
+for those. `imageToMusicXml(file)` is the one-shot convenience. The editor wraps
+this in `editor/src/use-image-import.ts` and calls it from `Editor.tsx`'s Import
+handler.
 
 Inference runs in `lib/import-image/src/worker/omr.worker.ts`, bundled by the
 build into `editor/dist/omr.worker.js` and loaded via `new Worker("/omr.worker.js")`.
