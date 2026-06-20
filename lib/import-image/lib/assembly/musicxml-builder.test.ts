@@ -202,4 +202,33 @@ describe("buildMusicXML", () => {
     expect(changeIndex).toBeGreaterThan(firstNoteEnd);
     expect(changeIndex).toBeLessThan(secondNoteIndex);
   });
+
+  it("emits <beam> elements for a run of eighth notes", () => {
+    const xml = buildMusicXML([
+      note("C4", "eighth", 0),
+      note("D4", "eighth", 0),
+    ]);
+    expect(xml).toContain('<beam number="1">begin</beam>');
+    expect(xml).toContain('<beam number="1">end</beam>');
+  });
+
+  it("does not emit <beam> for a lone eighth", () => {
+    const xml = buildMusicXML([
+      note("C4", "eighth", 0),
+      note("D4", "quarter", 0),
+    ]);
+    expect(xml).not.toContain("<beam");
+  });
+
+  it("uses the time signature to group beams", () => {
+    // Six eighths under 6/8 beam in two groups of three, not three of two.
+    const notes = Array.from({ length: 6 }, () => note("C4", "eighth", 0));
+    const xml = buildMusicXML(notes, {
+      attributes: { time: { beats: 6, beatType: 8 } },
+    });
+    expect((xml.match(/<beam number="1">begin<\/beam>/g) ?? []).length).toBe(2);
+    expect(
+      (xml.match(/<beam number="1">continue<\/beam>/g) ?? []).length,
+    ).toBe(2);
+  });
 });

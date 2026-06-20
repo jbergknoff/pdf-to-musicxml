@@ -285,7 +285,7 @@ Status: **Phases 0–3 are done** (see `AGENTS.md` for the as-built notes).
 | **1 — Segmentation** ✅ | oemer UNets running; masks overlaid on page; PDF/image decode. | model opset/layout/quantization, tiling, memory, perf. **Biggest infra risk — front-loaded.** |
 | **2 — Staff structure** ✅ | detected staves + unit size drawn on page. | pure algorithm; high confidence. |
 | **3 — Mono POC** ✅ | all staves → TrOMR → MusicXML with chord support → OSMD preview + download. **First end-to-end output.** Decoder pinned to WASM; TrOMR runs at full resolution. | token decoding, chord semantics, ORT provider gaps, WASM heap limits. |
-| **4 — Full single staff** | ~~key/time sig~~ (done — clef/key/time recovered by `lib/transcription/decode-attributes.ts` and emitted as the opening `<attributes>`), beams, ~~multi-page~~ (done — pages recognized one at a time and stitched into one document by `lib/assembly/combine-pages.ts`); grand staff paired into two-staff part. | assembly fidelity. |
+| **4 — Full single staff** | ~~key/time sig~~ (done — clef/key/time recovered by `lib/transcription/decode-attributes.ts`, incl. mid-staff changes), ~~beams~~ (done — inferred per beat by `lib/assembly/beams.ts`), ~~multi-page~~ (done — pages stitched by `lib/assembly/combine-pages.ts`); **remaining:** grand staff paired into a two-staff part. | assembly fidelity. |
 | **5 — Grand staff** | brace detection, paired staves, two-staff part, per-staff voices. | piano target reached. |
 | **6 — Robustness** | phone-photo dewarp/deskew, error handling, quantization + perf tuning. | real-world inputs. |
 | **7 — Polish** | caching, offline service worker, download/correction UX. | production feel. |

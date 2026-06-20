@@ -9,18 +9,8 @@
  * giving clean integer values for all standard subdivisions down to 32nd notes.
  */
 import type { NoteEvent, ScoreAttributes } from "../types";
-
-/** Quarter note = 4 divisions; must divide all supported duration values. */
-const DIVISIONS = 4;
-
-const DURATION_DIVISIONS: Record<NoteEvent["duration"], number> = {
-  whole: 16,
-  half: 8,
-  quarter: 4,
-  eighth: 2,
-  sixteenth: 1,
-  thirty_second: 1, // rounds to 1 — 32nd notes need DIVISIONS=8; acceptable for POC
-};
+import { type BeamElement, computeBeams } from "./beams";
+import { DIVISIONS, DURATION_DIVISIONS } from "./durations";
 
 const MUSICXML_TYPE: Record<NoteEvent["duration"], string> = {
   whole: "whole",
@@ -64,11 +54,13 @@ function escapeXml(text: string): string {
     .replace(/"/g, "&quot;");
 }
 
-function noteXml(
-  note: NoteEvent,
-  isFirst: boolean,
-  measureIndex: number,
-): string {
+function beamLines(beams: BeamElement[]): string[] {
+  return beams.map(
+    (beam) => `  <beam number="${beam.number}">${beam.type}</beam>`,
+  );
+}
+
+function noteXml(note: NoteEvent, beams: BeamElement[]): string {
   const divisions = DURATION_DIVISIONS[note.duration];
   const dottedDivisions = note.dotted ? Math.round(divisions * 1.5) : divisions;
   const type = MUSICXML_TYPE[note.duration];
@@ -110,6 +102,7 @@ function noteXml(
     `  <type>${type}</type>`,
     note.dotted ? "  <dot/>" : "",
     accidentalTag,
+    ...beamLines(beams),
     "</note>",
   ]
     .filter(Boolean)
@@ -168,6 +161,8 @@ function measureXml(
   measureNumber: number,
   isFirstMeasure: boolean,
   attributes: ScoreAttributes,
+  beats: number,
+  beatType: number,
 ): string {
   const children: string[] = [];
 
@@ -185,13 +180,14 @@ function measureXml(
       "</note>",
     );
   } else {
+    const beams = computeBeams(notes, beats, beatType);
     for (let index = 0; index < notes.length; index++) {
       const note = notes[index];
       // A mid-staff clef/key/time change takes effect before this note.
       if (note.attributeChange !== undefined) {
         children.push(attributeChangeXml(note.attributeChange));
       }
-      children.push(noteXml(note, index === 0, measureNumber - 1));
+      children.push(noteXml(note, beams.get(index) ?? []));
     }
   }
 
@@ -235,9 +231,29 @@ export function buildMusicXML(
     byMeasure[note.measureIndex].push(note);
   }
 
-  const measures = byMeasure.map((notesInMeasure, index) =>
-    measureXml(notesInMeasure, index + 1, index === 0, attributes),
-  );
+  // Track the time signature in effect at each measure's start (for beam
+  // grouping). It begins at the opening attributes and shifts when a note
+  // carries a time change; mid-measure changes take effect from the next
+  // measure for beaming purposes.
+  let beats = attributes.time?.beats ?? DEFAULT_BEATS;
+  let beatType = attributes.time?.beatType ?? DEFAULT_BEAT_TYPE;
+  const measures = byMeasure.map((notesInMeasure, index) => {
+    const xml = measureXml(
+      notesInMeasure,
+      index + 1,
+      index === 0,
+      attributes,
+      beats,
+      beatType,
+    );
+    for (const note of notesInMeasure) {
+      if (note.attributeChange?.time !== undefined) {
+        beats = note.attributeChange.time.beats;
+        beatType = note.attributeChange.time.beatType;
+      }
+    }
+    return xml;
+  });
 
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',

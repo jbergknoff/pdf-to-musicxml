@@ -138,6 +138,18 @@ Phase 3 transcription + MusicXML assembly:
   The first measure's `<attributes>` come from the optional `BuildOptions.attributes`
   (the first staff's recovered clef/key/time), each field defaulting to treble /
   C major / 4/4 when TrOMR did not emit it.
+- `lib/assembly/durations.ts` — shared duration arithmetic (divisions per
+  quarter, each type's divisions, dotted length, and `BEAM_COUNT` per type) used
+  by both the builder and the beam grouper (one source of truth, no import cycle).
+- `lib/assembly/beams.ts` — `computeBeams` reconstructs beaming, which is **not**
+  in TrOMR's tokens. It groups consecutive beamable notes (eighth and shorter)
+  that fall in the same beat into one beam, returning per-note `<beam>` elements
+  (begin/continue/end, plus hooks for lone secondary beams like the 16th of a
+  dotted-eighth/sixteenth). Grouping is by beat from the time signature — simple
+  meters per denominator beat, compound (x/8 with beats divisible by 3) per
+  dotted quarter — so a beam never crosses a beat. Rests and chord-tail notes
+  break/skip beams. The builder threads the running time signature (opening, then
+  any mid-staff `attributeChange.time`) into it per measure.
 - `lib/assembly/combine-pages.ts` — `combinePages` concatenates the per-page
   note streams of a multi-page score, offsetting each page's `measureIndex` past
   the measures of earlier pages so the combined document has one continuous
