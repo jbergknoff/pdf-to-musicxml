@@ -103,8 +103,10 @@ export function decodeTokens(
 ): NoteEvent[] {
   const notes: NoteEvent[] = [];
   let measureIndex = 0;
-  let lastDuration: DurationValue = "quarter";
-  let lastDotted = false;
+  // `chord` in TrOMR is a marker: "the next note_X token is simultaneous with
+  // the previous note." The pitch/lift at the chord token position are nonote;
+  // the chord member's pitch comes with the following note_X token.
+  let nextNoteIsChord = false;
 
   for (let i = 0; i < rhythmIds.length; i++) {
     const rhythmId = rhythmIds[i];
@@ -119,26 +121,12 @@ export function decodeTokens(
 
     if (BARLINE_TOKENS.has(rhythmToken)) {
       measureIndex++;
+      nextNoteIsChord = false;
       continue;
     }
 
-    // Chord token: emit the current index's pitch/lift as a note simultaneous
-    // with the previous one, inheriting its duration.
     if (rhythmToken === "chord") {
-      const pitchToken = PITCH_VOCAB[pitchIds[i]] ?? ".";
-      const liftToken = LIFT_VOCAB[liftIds[i]] ?? ".";
-      if (pitchToken !== "." && pitchToken !== "_") {
-        const accidental: AccidentalValue =
-          LIFT_TO_ACCIDENTAL[liftToken] ?? null;
-        notes.push({
-          pitch: pitchToken,
-          accidental,
-          duration: lastDuration,
-          dotted: lastDotted,
-          measureIndex,
-          chord: true,
-        });
-      }
+      nextNoteIsChord = true;
       continue;
     }
 
@@ -149,6 +137,7 @@ export function decodeTokens(
 
     const parsed = parseNoteRestToken(rhythmToken);
     if (parsed === null) {
+      nextNoteIsChord = false;
       continue;
     }
 
@@ -159,13 +148,13 @@ export function decodeTokens(
 
     // Skip malformed note entries where pitch is nonote/empty but rhythm says note.
     if (!parsed.isRest && (pitchToken === "." || pitchToken === "_")) {
+      nextNoteIsChord = false;
       continue;
     }
 
     const accidental: AccidentalValue = LIFT_TO_ACCIDENTAL[liftToken] ?? null;
-
-    lastDuration = parsed.duration;
-    lastDotted = parsed.dotted;
+    const isChord = nextNoteIsChord;
+    nextNoteIsChord = false;
 
     notes.push({
       pitch,
@@ -173,7 +162,7 @@ export function decodeTokens(
       duration: parsed.duration,
       dotted: parsed.dotted,
       measureIndex,
-      chord: false,
+      chord: isChord,
     });
   }
 
