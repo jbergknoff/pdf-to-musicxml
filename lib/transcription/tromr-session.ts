@@ -19,6 +19,12 @@ import { BOS, EOS, NONOTE } from "./vocabulary";
 export interface TrOMRSessions {
   encoder: InferenceSession;
   decoder: InferenceSession;
+  /**
+   * Execution provider the sessions run on. Needed by the decoder to work
+   * around a WebGPU constraint: GPUBuffer.size must be > 0, so zero-element
+   * tensors (the initial KV caches at step 0) are invalid on WebGPU.
+   */
+  provider: "webgpu" | "wasm";
 }
 
 /** Find the argmax over data[offset .. offset+size). */
@@ -77,6 +83,7 @@ async function runDecoder(
   decoderSession: InferenceSession,
   context: Float32Array,
   seqLen: number,
+  provider: "webgpu" | "wasm",
 ): Promise<{ rhythm: number[]; pitch: number[]; lift: number[] }> {
   const { numCacheTensors, numHeads, headDim, maxDecodingSteps } =
     TROMR_CONSTANTS;
@@ -96,11 +103,18 @@ async function runDecoder(
   let articulationToken = NONOTE;
   let slurToken = NONOTE;
 
-  // KV-cache tensors, initially empty (seq dimension = 0). Grow by 1 each step.
-  const cacheSeqLens: number[] = new Array(numCacheTensors).fill(0);
+  // WebGPU requires GPUBuffer.size > 0 — a zero-element tensor dims [1,8,0,64]
+  // creates a zero-byte buffer which is invalid. Start with one all-zero
+  // placeholder row instead; cache_len=0 on step 0 tells the model's causal
+  // mask that there are no valid past entries, so the placeholder is ignored.
+  // WASM has no such constraint and uses a true empty tensor (seqLen=0).
+  const initialCacheSeqLen = provider === "webgpu" ? 1 : 0;
+  const cacheSeqLens: number[] = new Array(numCacheTensors).fill(
+    initialCacheSeqLen,
+  );
   const caches: Float32Array[] = Array.from(
     { length: numCacheTensors },
-    () => new Float32Array(0),
+    () => new Float32Array(initialCacheSeqLen * numHeads * headDim),
   );
 
   for (let step = 0; step < maxDecodingSteps; step++) {
@@ -228,5 +242,5 @@ export async function runTrOMR(
   staff: Staff,
 ): Promise<{ rhythm: number[]; pitch: number[]; lift: number[] }> {
   const { context, seqLen } = await runEncoder(sessions.encoder, image, staff);
-  return runDecoder(sessions.decoder, context, seqLen);
+  return runDecoder(sessions.decoder, context, seqLen, sessions.provider);
 }

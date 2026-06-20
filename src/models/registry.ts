@@ -87,5 +87,7 @@ export async function loadTrOMRModels(
   const decoderBytes = await fetchModelBytes(MODEL_MANIFEST.tromrDecoder);
   const decoder: InferenceSession = await backend.createSession(decoderBytes);
 
-  return { encoder, decoder };
+  const provider =
+    backend.provider === "webgpu" ? ("webgpu" as const) : ("wasm" as const);
+  return { encoder, decoder, provider };
 }
