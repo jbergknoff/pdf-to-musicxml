@@ -1,9 +1,71 @@
 services:
-  # Bun toolchain for the editor (build, format, lint, typecheck, unit tests).
-  # The pdf-to-musicxml app has its own docker-compose under import-image/.
+  # Bun toolchain for the editor (build, format, lint, typecheck, unit tests)
+  # and the OMR pipeline under lib/import-image/.
   main:
     image: oven/bun:${BUN_VERSION:-1}
     command: echo
     volumes:
       - ${PWD}:${PWD}
     working_dir: ${PWD}
+
+  # Static server for the built editor/dist with the COOP/COEP headers the OMR
+  # WASM backend needs (scripts/serve.ts). Used by `make up` and Playwright.
+  server:
+    image: oven/bun:${BUN_VERSION:-1}
+    command: bun scripts/serve.ts
+    volumes:
+      - ${PWD}:${PWD}
+    ports:
+      - "3456:3456"
+    working_dir: ${PWD}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bun",
+          "-e",
+          "fetch('http://localhost:3456').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+      start_period: 3s
+
+  playwright:
+    image: mcr.microsoft.com/playwright:v1.60.0-noble
+    command: echo
+    volumes:
+      - ${PWD}:${PWD}
+    working_dir: ${PWD}
+    environment:
+      - BASE_URL=http://server:3456
+    depends_on:
+      server:
+        condition: service_healthy
+
+  # One-off: optimize the downloaded ONNX weights with onnxsim (run via
+  # `make optimize-models`). Python image because onnx/onnxsim/onnxruntime are
+  # Python tools, pip-installed at run time. 3.11 (not 3.12) so onnxsim resolves
+  # a manylinux wheel rather than a from-source build.
+  python:
+    image: python:3.11-slim
+    command: echo
+    volumes:
+      - ${PWD}:${PWD}
+    working_dir: ${PWD}
+    environment:
+      - PIP_CACHE_DIR=${PWD}/.pip-cache
+
+  # One-off: upload the model weights to Netlify Blobs with the Netlify CLI (run
+  # via `make upload-models`). Node image so `npx netlify-cli` works without a
+  # host install. Env vars passed through from the host shell.
+  netlify-cli:
+    image: node:22-slim
+    command: echo
+    volumes:
+      - ${PWD}:${PWD}
+    working_dir: ${PWD}
+    environment:
+      - NETLIFY_AUTH_TOKEN
+      - NETLIFY_SITE_ID
+      - NETLIFY_CLI_VERSION
