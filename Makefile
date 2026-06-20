@@ -1,19 +1,25 @@
-# Root tooling for the editor (editor/), the MusicXML editor that will become
-# this repo's primary app. The original pdf-to-musicxml OMR pipeline lives,
-# self-contained, under import-image/ with its own Makefile — run its targets
-# from inside that directory.
+# Root tooling for the editor (editor/), this repo's primary app. The editor's
+# "import from image/PDF" feature runs the OMR pipeline that now lives under
+# lib/import-image/ (moved here from its own top-level app and folded into this
+# root toolchain).
 #
-# Netlify sets NETLIFY=true; use tools directly there since Docker isn't
+# Netlify sets NETLIFY=true; use the tools directly there since Docker isn't
 # available.
 ifdef NETLIFY
 run = $(1)
+playwright = node_modules/.bin/playwright
 else
 run = docker compose run --rm main $(1)
+playwright = docker compose run --rm playwright node_modules/.bin/playwright
 endif
 
 bun = $(call run,bun)
 biome = $(call run,./node_modules/.bin/biome)
 tsc = $(call run,./node_modules/.bin/tsc)
+
+# Anything under lib/import-image whose scripts use paths relative to that
+# directory (model download/optimize, sample comparison) runs with it as the cwd.
+in_import_image = $(call run,sh -c 'cd lib/import-image && $(1)')
 
 # Pre-create node_modules before Docker runs so the directory is owned by the
 # host user (Docker would otherwise create it as root).
@@ -30,15 +36,15 @@ lint: node_modules
 typecheck: node_modules
 	$(tsc) --noEmit
 
+# Editor tests plus the OMR pipeline's lib/src tests. Scoped to those trees so
+# `bun test` does not pick up lib/import-image/tests/ (Playwright integration).
 unit-test: node_modules
-	$(bun) test editor
+	$(bun) test editor lib/import-image/lib lib/import-image/src
 
-# The WYSIWYG MusicXML editor (editor/) is a self-contained Bun workspace
-# member. This is also the Netlify build target once the editor deploy is wired
-# up (today Netlify still deploys import-image — see netlify.toml).
+# Build the editor SPA (+ the bundled OMR worker and its ORT/pdf.js assets) into
+# editor/dist. This is the Netlify build target (see netlify.toml).
 build-editor: node_modules
-	mkdir -p editor/dist
-	$(bun) build editor/src/main.tsx --outdir editor/dist --minify
+	$(bun) run scripts/build-editor.ts
 
 build: build-editor
 
@@ -50,5 +56,36 @@ up:
 
 down:
 	docker compose down
+
+# --- OMR model weights (out of band; see lib/import-image/AGENTS.md) ----------
+# These run inside lib/import-image so their relative paths (public/models/,
+# samples/) resolve there. The weights (~109 MB) are gitignored.
+
+# Download the oemer ONNX weights into lib/import-image/public/models/.
+models: node_modules
+	$(call in_import_image,bun run scripts/download-models.ts)
+
+# Optimize the downloaded weights with onnxsim (fixed input shape) into the
+# served v2 form. Run once, after `make models`. See docs/model-weights.md.
+optimize-models: models
+	docker compose run --rm python sh -c 'cd lib/import-image \
+		&& pip install --quiet onnx==1.16.2 onnxsim==0.4.36 onnxruntime==1.18.1 numpy==1.26.4 \
+		&& python scripts/optimize-models.py'
+
+# Headless low-vs-high-resolution validation of the segmentation pixel budget.
+# Out of band; needs `make models` and pages in lib/import-image/samples/.
+compare-resolutions: node_modules models
+	$(call in_import_image,bun run scripts/compare-resolutions.ts $(ARGS))
+
+# Upload the weights to Netlify Blobs once, out of band. Requires
+# NETLIFY_AUTH_TOKEN and NETLIFY_SITE_ID in your environment.
+upload-models: node_modules
+	$(call in_import_image,bun run scripts/upload-models.ts)
+	docker compose run --rm netlify-cli sh -c 'cd lib/import-image && node scripts/blob-upload.mjs'
+
+# Browser-level acceptance check (cross-origin isolation, inference provider).
+# Not part of pr-ready: it needs the Playwright browser image.
+integration-test: build node_modules
+	$(playwright) test --config lib/import-image/playwright.config.ts
 
 pr-ready: format lint typecheck build unit-test

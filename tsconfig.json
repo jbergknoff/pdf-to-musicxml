@@ -9,5 +9,11 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["editor"]
+  "include": [
+    "editor",
+    "lib/import-image/index.ts",
+    "lib/import-image/src",
+    "lib/import-image/lib",
+    "lib/import-image/netlify"
+  ]
 }

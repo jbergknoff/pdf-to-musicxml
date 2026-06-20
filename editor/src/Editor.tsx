@@ -34,6 +34,7 @@ import {
   type NoteType,
   parseScore,
 } from "./sheet-music/index";
+import { isImportableImage, useImageImport } from "./use-image-import";
 
 const SELECTION_COLOR = "#1976d2";
 
@@ -45,6 +46,7 @@ export function Editor() {
   const [version, setVersion] = useState(0);
   const [selectedDuration, setSelectedDuration] = useState<NoteType>("quarter");
   const [selectedHandle, setSelectedHandle] = useState<NoteHandle | null>(null);
+  const imageImport = useImageImport();
 
   // Bump the version after every document mutation so the render recomputes.
   const commit = useCallback(() => setVersion((v) => v + 1), []);
@@ -152,16 +154,25 @@ export function Editor() {
     async (event: Event) => {
       const input = event.currentTarget as HTMLInputElement;
       const file = input.files?.[0];
+      // Reset the input up front so re-selecting the same file fires `change`
+      // again, even though the recognition below is async.
+      input.value = "";
       if (!file) {
         return;
       }
-      const text = await file.text();
-      documentRef.current = parseDocument(text);
+      // PDFs and raster images go through the OMR pipeline; MusicXML is parsed
+      // directly. The recovered MusicXML loads into the editor either way.
+      const musicxml = isImportableImage(file)
+        ? await imageImport.importImage(file)
+        : await file.text();
+      if (musicxml === null) {
+        return;
+      }
+      documentRef.current = parseDocument(musicxml);
       setSelectedHandle(null);
       commit();
-      input.value = "";
     },
-    [commit],
+    [commit, imageImport],
   );
 
   const onExport = useCallback(() => {
@@ -221,15 +232,17 @@ export function Editor() {
             borderRadius: 6,
             border: "1px solid #ccc",
             background: "#fff",
-            cursor: "pointer",
+            cursor: imageImport.busy ? "default" : "pointer",
+            color: imageImport.busy ? "#aaa" : "#333",
             fontSize: 14,
           }}
         >
           Import
           <input
             type="file"
-            accept=".musicxml,.xml"
+            accept=".musicxml,.xml,.pdf,image/*"
             onChange={onImport}
+            disabled={imageImport.busy}
             style={{ display: "none" }}
           />
         </label>
@@ -249,6 +262,14 @@ export function Editor() {
           Export
         </button>
       </div>
+      {imageImport.status !== null ? (
+        <div style={{ fontSize: 13, color: "#555" }}>{imageImport.status}</div>
+      ) : null}
+      {imageImport.error !== null ? (
+        <div style={{ fontSize: 13, color: "#c62828" }}>
+          Import failed: {imageImport.error}
+        </div>
+      ) : null}
       <div style={{ flex: 1, minHeight: 0 }}>
         <EditableSheetMusic
           musicxml={musicxml}

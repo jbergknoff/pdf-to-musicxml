@@ -1,28 +1,26 @@
-# Netlify still deploys the import-image app (the original pdf-to-musicxml OMR
-# pipeline), which now lives under import-image/ after the monorepo reorg. The
-# `base` directory points Netlify at it, so its build, publish dir, and
-# functions resolve exactly as before — the deploy is unchanged byte-for-byte.
-#
-# The editor (editor/) is set up to build (`make build-editor` at the repo
-# root) but its deploy is intentionally NOT wired yet: it has not been verified
-# in production. To flip the deploy to the editor once it's tested, drop the
-# `base` line, set `command = "make build-editor"` and `publish = "editor"`,
-# point `[functions]` away (or remove it), and drop the COOP/COEP headers (the
-# editor needs no SharedArrayBuffer / cross-origin isolation).
+# Netlify deploys the editor (editor/): the WYSIWYG MusicXML editor, whose
+# "import from image/PDF" feature runs the OMR pipeline under lib/import-image/.
+# `make build-editor` (scripts/build-editor.ts) bundles the editor and the OMR
+# worker and stages the ORT WASM + pdf.js worker assets into editor/dist, which
+# is the publish (site-root) directory.
 [build]
-  base = "import-image"
-  command = "make build"
-  publish = "dist"
+  command = "make build-editor"
+  publish = "editor/dist"
 
 [functions]
-  directory = "netlify/functions"
+  # The OMR model weights (~109 MB) are NOT in the static deploy: they are
+  # uploaded once, out of band, to Netlify Blobs (`make upload-models`), and this
+  # function streams them back same-origin at /models/<file> (required under
+  # COEP). The function moved with the pipeline to lib/import-image/.
+  directory = "lib/import-image/netlify/functions"
 
 [build.environment]
   BUN_VERSION = "1"
 
-# ORT Web's threaded WASM backend needs SharedArrayBuffer, which the browser
-# only exposes to cross-origin-isolated pages. Mirror the COOP/COEP headers the
-# dev server sets (import-image/scripts/serve.ts) so production behaves the same.
+# ORT Web's threaded WASM backend (used by the image/PDF import) needs
+# SharedArrayBuffer, which the browser only exposes to cross-origin-isolated
+# pages. Mirror the COOP/COEP headers the dev server sets (scripts/serve.ts) so
+# production behaves the same.
 [[headers]]
   for = "/*"
   [headers.values]
