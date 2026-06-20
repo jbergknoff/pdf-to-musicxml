@@ -5,6 +5,9 @@ import {
   prepareStaffTensor,
   TROMR_INPUT_HEIGHT,
   TROMR_INPUT_WIDTH,
+  TROMR_NORM_MEAN,
+  TROMR_NORM_STD,
+  TROMR_NORM_WHITE,
 } from "./staff-crop";
 
 function solidImage(
@@ -79,29 +82,44 @@ describe("prepareStaffTensor", () => {
     expect(data.length).toBe(TROMR_INPUT_HEIGHT * TROMR_INPUT_WIDTH);
   });
 
-  it("normalizes values to [0, 1]", () => {
-    const image = solidImage(32, 32, 255, 255, 255);
+  it("keeps normalized values within the mean/std range", () => {
+    // A gray image plus white padding: every value lies between the normalized
+    // black (-mean/std) and white ((1 - mean)/std) bounds.
+    const image = solidImage(32, 32, 128, 128, 128);
+    const blackBound = -TROMR_NORM_MEAN / TROMR_NORM_STD;
     const { data } = prepareStaffTensor(image, 32);
     for (const value of data) {
-      expect(value).toBeGreaterThanOrEqual(0);
-      expect(value).toBeLessThanOrEqual(1);
+      expect(value).toBeGreaterThanOrEqual(blackBound);
+      expect(value).toBeLessThanOrEqual(TROMR_NORM_WHITE);
     }
   });
 
-  it("produces 1.0 for a fully white image", () => {
+  it("produces the normalized white value for a fully white image", () => {
     const image = solidImage(16, 16, 255, 255, 255);
-    const { data } = prepareStaffTensor(image, 16);
-    for (const value of data) {
-      expect(value).toBeCloseTo(1.0, 5);
-    }
-  });
-
-  it("produces 0.0 for a fully black image", () => {
-    const image = solidImage(16, 16, 0, 0, 0);
-    // Pass matching targetWidth so there is no white padding.
     const { data } = prepareStaffTensor(image, 16, 16);
     for (const value of data) {
-      expect(value).toBeCloseTo(0.0, 5);
+      expect(value).toBeCloseTo(TROMR_NORM_WHITE, 5);
     }
+  });
+
+  it("produces the normalized black value for a fully black image", () => {
+    const image = solidImage(16, 16, 0, 0, 0);
+    // Pass matching targetWidth so there is no white padding.
+    const blackValue = (0 - TROMR_NORM_MEAN) / TROMR_NORM_STD;
+    const { data } = prepareStaffTensor(image, 16, 16);
+    for (const value of data) {
+      expect(value).toBeCloseTo(blackValue, 5);
+    }
+  });
+
+  it("vertically centers the staff, leaving white margins above and below", () => {
+    // A short image (16 tall) on a 64-tall canvas: the content occupies the
+    // middle band, with normalized-white padding rows top and bottom.
+    const image = solidImage(16, 16, 0, 0, 0);
+    const { data } = prepareStaffTensor(image, 64, 16);
+    // Top row is padding (white); a middle row holds black content.
+    expect(data[0]).toBeCloseTo(TROMR_NORM_WHITE, 5);
+    const blackValue = (0 - TROMR_NORM_MEAN) / TROMR_NORM_STD;
+    expect(data[32 * 16]).toBeCloseTo(blackValue, 5);
   });
 });

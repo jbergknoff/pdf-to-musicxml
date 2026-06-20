@@ -9,6 +9,18 @@ export const TROMR_INPUT_HEIGHT = 256;
 export const TROMR_INPUT_WIDTH = 1280;
 
 /**
+ * Per-pixel normalization TrOMR was trained with (homr `ConvertToArray`):
+ * after scaling pixels to [0, 1], apply `(value - mean) / std`. These exact
+ * constants matter — the encoder sees the wrong input distribution without
+ * them, which transcribes detected staves into plausible-but-wrong notes.
+ */
+export const TROMR_NORM_MEAN = 0.7931;
+export const TROMR_NORM_STD = 0.1738;
+
+/** The normalized value of a white (background) pixel: (1 - mean) / std. */
+export const TROMR_NORM_WHITE = (1 - TROMR_NORM_MEAN) / TROMR_NORM_STD;
+
+/**
  * Crop the bounding band for one staff from `image`, adding vertical padding
  * proportional to the staff's unit size so ledger-line notes above and below
  * the staff are included.
@@ -84,10 +96,15 @@ function resizeToSize(
 }
 
 /**
- * Prepare a cropped staff strip for TrOMR inference: scale to fit within
- * [targetHeight × targetWidth] preserving aspect ratio, convert to grayscale,
- * normalize to [0, 1], and pad the remainder with white (1.0) so the output
- * tensor is always exactly [targetHeight × targetWidth].
+ * Prepare a cropped staff strip for TrOMR inference, matching homr's
+ * `get_tr_omr_canvas_size` + `center_image_on_canvas` + `ConvertToArray`:
+ *
+ *   1. Scale to fit within [targetHeight × targetWidth] preserving aspect ratio.
+ *   2. Place left-aligned and **vertically centered** on a white canvas (the
+ *      model reads pitch from absolute vertical position, so centering — not
+ *      top-aligning — is what keeps pitches correct).
+ *   3. Convert to grayscale, scale to [0, 1], then normalize:
+ *      `(value - TROMR_NORM_MEAN) / TROMR_NORM_STD`.
  *
  * Returns a Float32Array in row-major order for a [1, 1, H, W] NCHW tensor.
  */
@@ -106,17 +123,22 @@ export function prepareStaffTensor(
 
   const resized = resizeToSize(image, scaledWidth, scaledHeight);
 
-  // Initialize to white (1.0 = background), then copy the scaled content
-  // into the top-left corner, leaving right/bottom as white padding.
-  const data = new Float32Array(targetHeight * targetWidth).fill(1.0);
+  // Fill with normalized white (background), then copy the scaled content in,
+  // left-aligned and vertically centered, leaving the margins as white padding.
+  const data = new Float32Array(targetHeight * targetWidth).fill(
+    TROMR_NORM_WHITE,
+  );
+  const yOffset = Math.floor((targetHeight - scaledHeight) / 2);
 
   for (let y = 0; y < scaledHeight; y++) {
+    const destinationRow = (yOffset + y) * targetWidth;
     for (let x = 0; x < scaledWidth; x++) {
       const r = resized.data[(y * scaledWidth + x) * 4];
       const g = resized.data[(y * scaledWidth + x) * 4 + 1];
       const b = resized.data[(y * scaledWidth + x) * 4 + 2];
-      // ITU-R BT.601 luma; divide by 255 to normalize to [0, 1].
-      data[y * targetWidth + x] = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+      // ITU-R BT.601 luma scaled to [0, 1], then TrOMR mean/std normalization.
+      const luma = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+      data[destinationRow + x] = (luma - TROMR_NORM_MEAN) / TROMR_NORM_STD;
     }
   }
 
