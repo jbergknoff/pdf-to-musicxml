@@ -1,80 +1,64 @@
-# Source-vs-recovered MusicXML comparison
+# Source-vs-recovered MusicXML: the diff/affordance model
 
-The OMR integration tests currently assert the recovered MusicXML against a
-**frozen snapshot** of today's (imperfect) output. The goal we are moving toward
-is to assert the recovered output **against the `*.source.musicxml`** — the real
-score — modulo a small set of *explicitly-codified expected differences*. This
-file quantifies the gap so we know what those codified differences are and how
-big the genuine recognition errors still are.
+The OMR integration tests assert the recovered MusicXML **against each fixture's
+source score** (`<name>.source.musicxml`), not against a frozen snapshot of
+today's imperfect output. The recovered MusicXML is no longer committed at all.
 
-Regenerate the numbers with `make compare-fixtures`
-(`helpers/compare-musicxml.ts`). It reduces both files to an order-preserving
-stream of pitched notes, aligns them (Needleman–Wunsch), and reports pitch
-recall/precision, accidental accuracy on matched notes, the document attribute
-diffs, and the source features the OMR drops.
+Each fixture declares, in the spec's `EXPECTED_DIFFERENCES`, the *specific*
+ways its recovery currently differs from the real score — its **affordances**.
+The test (`../helpers/musicxml-diff.ts`) computes the actual diff and asserts it
+matches that list **exactly**, which ratchets in both directions:
 
-## Current numbers
+- an **uncodified** difference fails the test — a regression, or a real
+  difference nobody accounted for; and
+- an affordance that **no longer matches** an actual difference *also* fails —
+  the OMR improved past it, so the affordance must be deleted (or its count
+  tightened). Improving the OMR is meant to feel like: make it better → a
+  now-unnecessary affordance trips → delete it → the bar is permanently higher.
 
-| fixture               | notes (src→rec) | measures | pitch recall | pitch precision | accidental | wrong / missed / spurious |
-| --------------------- | --------------- | -------- | ------------ | --------------- | ---------- | ------------------------- |
-| `chant`               | 27 → 27         | 1 → 1    | **100%**     | **100%**        | 100%       | 0 / 0 / 0                 |
-| `saltarello`          | 112 → 112       | 22 → 22  | **100%**     | **100%**        | 100%       | 0 / 0 / 0                 |
-| `mozart-piano-sonata` | 70 → 53         | 5 → 5    | 57%          | 76%             | 98%        | 11 / 19 / 2               |
-| `binchois`            | 160 → 131       | 34 → 23  | 51%          | 63%             | 96%        | 20 / 58 / 29              |
+## What is compared
 
-(Pitch alignment compares step + octave; accidental accuracy is reported
-separately, over the matched notes.)
+The ordered stream of pitched notes (step + octave, accidentals checked
+separately) and the document attributes: key, time signature, clefs, measure
+count. Notes are aligned with Needleman–Wunsch so "wrong pitch", "missed", and
+"spurious" come out separately.
 
-## What the differences are
+## What is deliberately not compared (stripped, not ratcheted)
 
-### 1. Expected differences (codify, then ignore in the assertion)
+These are permanent properties of the pipeline, not deficiencies, so the diff
+ignores them rather than asking each fixture to codify them:
 
-These hold even on the two fixtures the OMR recovers perfectly, so they are
-properties of the pipeline, not recognition errors:
+- **Notational features the builder never emits** — `lyric`, `slur`, `tie`,
+  `direction`, `dynamics`, `articulations`, `ornaments`, `stem`, `grace`,
+  `tuplet`, `fermata` (`NEVER_COMPARED_FEATURES` in `musicxml-diff.ts`).
+- **Raw `<duration>` values** — the builder normalizes `<divisions>` (e.g. 8→4),
+  so durations aren't commensurable; only note identity and order are compared.
+  (Rhythm/type comparison is a possible future addition.)
+- **Layout / identification / print metadata.**
 
-- **Document/notational features the builder never emits.** Every source carries
-  some of: `lyric`, `slur`, `tie`, `direction`, `dynamics`, `articulations`,
-  `ornaments`, `stem`, `grace`, `tuplet`, `fermata`. The OMR targets pitches and
-  rhythm only, so these are dropped by design. (`EXPECTED_DROPPED_FEATURES` in
-  the comparator lists them.)
-- **`divisions` normalization.** Sources encode at `divisions=8`; the builder
-  emits `divisions=4`. Same musical durations, different unit — compare durations
-  in beats, not raw `<duration>`.
-- **Header/layout metadata.** `movement-title`, `identification`, `defaults`,
-  `print`, `default-x`/`default-y`, MIDI instrument blocks — none are recovered.
+## Current affordances (what the gap is today)
 
-### 2. Genuine recognition errors (the OMR's actual job — drive these down)
+| fixture               | codified affordances                                                                 |
+| --------------------- | ------------------------------------------------------------------------------------ |
+| `chant`               | time signature `senza-misura`→`4/4`                                                   |
+| `saltarello`          | time signature `6/8`→`4/4`                                                            |
+| `mozart-piano-sonata` | time `2/4`→`4/4`; 19 missed, 11 wrong-pitch, 2 spurious, 1 wrong-accidental           |
+| `binchois` (skipped)  | time `3/4`→`4/4`; 34→23 measures; 4→2 clefs; 58 missed, 20 wrong, 29 spurious, 3 acc. |
 
-- **Time signature is always wrong.** TrOMR did not emit a time signature for any
-  of the four, so the builder defaults to `4/4` — even where the source is `6/8`
-  (`saltarello`), `2/4` (`mozart`), `3/4` (`binchois`), or `senza-misura`
-  (`chant`). This is the single most consistent error and the highest-value fix:
-  it is *almost* codifiable as "expected", but it is genuinely wrong output, so
-  it belongs here, not in §1.
-- **Dropped / spurious / mis-pitched notes** on the dense scores: `mozart` loses
-  19 notes (43% recall miss) and `binchois` 58. Accidentals, once a note is found,
-  are essentially correct (96–100%) — the weakness is *finding and placing* notes,
-  not spelling them.
-- **Missing staves / measures on multi-system pages.** `binchois` is four
-  bass-clef staves across two systems; only two staves' worth of clefs and 23 of
-  34 measures survive. This is why it over-fills a measure and OSMD refuses to
-  engrave it — hence it is currently in `SKIPPED_FIXTURES`.
+Read this as: `chant` and `saltarello` recover **every pitch and attribute except
+the meter**; the only thing standing between them and a strict source-equality
+assertion is time-signature recovery. The dense scores additionally drop and
+mis-place notes.
 
-## Toward asserting against the source
+## The highest-value fixes (which affordances to retire first)
 
-A source-based assertion would, per fixture:
-
-1. Normalize both scores to the comparator's pitched-note stream + per-measure
-   beat durations (folding away §1: drop the listed features, normalize
-   `divisions`, ignore layout/metadata).
-2. Assert pitch recall/precision and accidental accuracy **at or above a
-   per-fixture threshold** (100% for `chant`/`saltarello`; a tracked,
-   ratcheting floor for `mozart`/`binchois`).
-3. Assert the recovered key/clef equal the source; assert the time signature
-   equals the source **once TrOMR emits it** (today this would fail every
-   fixture — the one codified exception to remove first).
-
-The two perfect fixtures (`chant`, `saltarello`) could move to a strict
-source-equality assertion immediately, modulo §1 and the time signature. The
-remaining gap to a fully source-based suite is the time-signature recovery plus
-raising the dense-score recall.
+1. **Time signature.** Codified on *all four* fixtures — TrOMR emits no time
+   signature, so the builder defaults to `4/4`. Recovering the meter would retire
+   four affordances at once and let `chant`/`saltarello` assert exact equality.
+2. **Notehead recall on dense staves** (`mozart`, `binchois` missed-notes).
+   Accidentals, once a note is found, are essentially correct (the
+   wrong-accidental counts are tiny), so the weakness is *finding and placing*
+   notes, not spelling them.
+3. **Staff/system detection** (`binchois` clef-count and measure-count): only two
+   of its four bass-clef staves survive, which is also why it over-fills a measure
+   and can't be engraved — hence it is in `SKIPPED_FIXTURES`.

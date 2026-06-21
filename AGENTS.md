@@ -57,24 +57,29 @@ make typecheck     # tsc --noEmit
 make unit-test     # bun test editor + lib/import-image lib/src
 make integration-test # Playwright (lib/import-image/playwright.config.ts)
 make omr-integration-test # end-to-end OMR: real pipeline (Node/CPU) over
-                   # musicxml.com fixture images, asserting the recovered
-                   # MusicXML + an OSMD screenshot. Slow but deterministic;
-                   # downloads the v2 weights once into public/models/.
-                   # Regenerate baselines with ARGS=--update-snapshots.
-make compare-fixtures # quantify recovered-vs-source MusicXML per fixture
-                   # (pitch recall/precision, accidental accuracy, attribute
-                   # diffs, dropped features). Pure analysis over committed
-                   # files; see tests/integration/fixtures/COMPARISON.md.
+                   # musicxml.com fixture images, diffing the recovered MusicXML
+                   # against each fixture's source score (only codified
+                   # affordances allowed) + an OSMD screenshot. Slow but
+                   # deterministic; downloads the v2 weights once into
+                   # public/models/. Regenerate screenshots with
+                   # ARGS=--update-snapshots.
 make pr-ready      # format, lint, typecheck, build, unit-test
 ```
 
 The OMR integration tests (`lib/import-image/tests/integration/import-image.spec.ts`,
 config `playwright.omr.config.ts`) run the recognition pipeline headlessly in
 Node (onnxruntime-node, CPU — `tests/integration/helpers/omr-pipeline.ts` mirrors
-`omr.worker.ts`) so the recovered MusicXML is deterministic, then render it with
-OSMD in Chromium for a screenshot. Fixtures and committed baselines live under
-`tests/integration/fixtures/` and `tests/integration/__snapshots__/`. CI runs them
-in the `omr-integration` job (separate from the editor job; caches the weights).
+`omr.worker.ts`) so the recovered MusicXML is deterministic, then **diff it against
+the fixture's source score** (`helpers/musicxml-diff.ts`) and render it with OSMD
+in Chromium for a screenshot. The recovered MusicXML is **not** committed — each
+fixture instead lists, in the spec's `EXPECTED_DIFFERENCES`, the specific
+currently-expected ways its recovery differs from the real score (the "affordances").
+The diff is a two-way ratchet: an uncodified difference fails (regression), and an
+affordance that no longer matches any actual difference also fails (improve the OMR,
+then delete the affordance). Fixtures (images + `*.source.musicxml`) and the
+committed screenshot baselines live under `tests/integration/fixtures/` and
+`tests/integration/__snapshots__/` (screenshots only). CI runs them in the
+`omr-integration` job (separate from the editor job; caches the weights).
 
 Out-of-band OMR model-weight targets (weights are ~109 MB, gitignored, not
 committed) run inside `lib/import-image/` so their relative paths resolve:
