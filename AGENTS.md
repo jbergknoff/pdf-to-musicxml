@@ -61,6 +61,10 @@ make omr-integration-test # end-to-end OMR: real pipeline (Node/CPU) over
                    # MusicXML + an OSMD screenshot. Slow but deterministic;
                    # downloads the v2 weights once into public/models/.
                    # Regenerate baselines with ARGS=--update-snapshots.
+make compare-fixtures # quantify recovered-vs-source MusicXML per fixture
+                   # (pitch recall/precision, accidental accuracy, attribute
+                   # diffs, dropped features). Pure analysis over committed
+                   # files; see tests/integration/fixtures/COMPARISON.md.
 make pr-ready      # format, lint, typecheck, build, unit-test
 ```
 

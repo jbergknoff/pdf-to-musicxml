@@ -102,4 +102,11 @@ integration-test: build node_modules
 omr-integration-test: node_modules
 	$(playwright_omr) test --config lib/import-image/playwright.omr.config.ts $(ARGS)
 
+# Quantify how far each fixture's recovered MusicXML (the committed snapshot) is
+# from its source score: pitch recall/precision, accidental accuracy, the
+# attribute diffs (divisions/key/time/clef), and the source features the OMR
+# drops. Pure analysis over committed files — no inference, no network, fast.
+compare-fixtures: node_modules
+	$(bun) run lib/import-image/tests/integration/helpers/compare-musicxml.ts
+
 pr-ready: format lint typecheck build unit-test

@@ -2,9 +2,11 @@
 
 Input images for the end-to-end OMR integration tests
 (`../import-image.spec.ts`). Each `<name>.png` is fed through the *actual*
-recognition pipeline; `<name>.source.musicxml` is the original score kept for
-provenance only (the tests never read it — they assert against the recovered
-output in `../__snapshots__/`, not against this source).
+recognition pipeline; `<name>.source.musicxml` is the original score. The tests
+assert against the recovered output in `../__snapshots__/`, not against this
+source — but `make compare-fixtures` (`../helpers/compare-musicxml.ts`) measures
+how far the recovered output is from the source, and `COMPARISON.md` writes up
+those numbers and the path toward asserting against the source directly.
 
 ## Provenance & license
 
@@ -25,16 +27,20 @@ The set is deliberately a **range of complexity**, not just single-staff scores.
 
 ## What each fixture asserts
 
-Every fixture asserts the recovered MusicXML against a committed snapshot. Most
-also assert an OpenSheetMusicDisplay screenshot of that MusicXML. `binchois` is
-**content-only** (see `CONTENT_ONLY_FIXTURES` in the spec): the imperfect OMR
-output over-fills a measure, so OSMD/VexFlow refuses to engrave it — the same
-failure the editor's ScoreView surfaces. We still lock its MusicXML as a
-regression baseline.
+Every fixture is an ordinary test that asserts the recovered MusicXML against a
+committed snapshot **and** an OpenSheetMusicDisplay screenshot of it.
+
+`binchois` is currently in `SKIPPED_FIXTURES` (see the spec): the OMR loses ~12%
+of its notes and a third of its measures and over-fills a measure, so OSMD/VexFlow
+refuses to engrave it — the same failure the editor's ScoreView surfaces. It is
+written as a full (content + screenshot) test but skipped with a `TODO`, so it
+stays a visible reminder to improve the OMR rather than being downgraded to a
+weaker assertion. Unskip it once the pipeline recovers it correctly.
 
 ## Adding a fixture
 
 1. Drop `<name>.png` (and optionally `<name>.source.musicxml`) here.
 2. Regenerate baselines: `make omr-integration-test ARGS=--update-snapshots`.
-3. If OSMD cannot render the result, add `<name>` to `CONTENT_ONLY_FIXTURES`.
+3. If the OMR cannot yet recover it well enough to render, add `<name>` to
+   `SKIPPED_FIXTURES` with a `TODO` (don't downgrade the assertion).
 4. Review the new `../__snapshots__/<name>.*` and commit them.

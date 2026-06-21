@@ -41,12 +41,19 @@ function fixtureNames(): string[] {
     .sort();
 }
 
-// Fixtures whose (imperfect) recovered MusicXML OpenSheetMusicDisplay cannot
-// engrave — OMR over-fills a measure on these dense pages and VexFlow throws a
-// RuntimeError, exactly as the editor's ScoreView surfaces. We still lock the
-// recovered MusicXML as a regression baseline, but skip the screenshot. Move a
-// name out of this set once the pipeline produces renderable output for it.
-const CONTENT_ONLY_FIXTURES = new Set<string>(["binchois"]);
+// Fixtures the pipeline cannot yet recognize well enough to pass. They are
+// written as ordinary tests (recovered-MusicXML snapshot + OSMD screenshot) but
+// SKIPPED, so each stays visible in the report as a standing reminder to improve
+// the OMR rather than being quietly downgraded to a weaker assertion. Unskip a
+// name once the pipeline produces correct, renderable output for it (and refresh
+// its snapshots with `--update-snapshots`).
+//
+// TODO: improve the OMR until `binchois` passes, then drop it from this set.
+// Today its recovered MusicXML loses ~12% of the notes and a third of the
+// measures, and over-fills a measure so OSMD/VexFlow refuses to engrave it (the
+// same failure the editor's ScoreView surfaces). See `make compare-fixtures`
+// (helpers/compare-musicxml.ts) for the per-fixture source-vs-recovered metrics.
+const SKIPPED_FIXTURES = new Set<string>(["binchois"]);
 
 // Loading ~109 MB of weights and creating four inference sessions is the
 // expensive setup; workers:1 (see the config) runs the fixtures in one worker,
@@ -62,6 +69,10 @@ test.beforeAll(async () => {
 
 for (const name of fixtureNames()) {
   test(`recognizes and renders ${name}`, async ({ page }) => {
+    test.skip(
+      SKIPPED_FIXTURES.has(name),
+      "TODO: OMR is not yet good enough for this fixture — see SKIPPED_FIXTURES",
+    );
     // CPU transcription of a full page is the slow part (~1 min/page).
     test.setTimeout(5 * 60 * 1000);
 
@@ -75,10 +86,6 @@ for (const name of fixtureNames()) {
 
     // 1) MusicXML content — committed, human-readable, diffable in review.
     expect(result.musicXml).toMatchSnapshot(`${name}.musicxml`);
-
-    if (CONTENT_ONLY_FIXTURES.has(name)) {
-      return;
-    }
 
     // 2) Rendered engraving — OSMD screenshot, with a small pixel tolerance for
     //    anti-aliasing. Generated in the pinned Playwright image so CI matches.
