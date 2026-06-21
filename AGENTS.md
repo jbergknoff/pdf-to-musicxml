@@ -56,8 +56,21 @@ make lint          # biome lint
 make typecheck     # tsc --noEmit
 make unit-test     # bun test editor + lib/import-image lib/src
 make integration-test # Playwright (lib/import-image/playwright.config.ts)
+make omr-integration-test # end-to-end OMR: real pipeline (Node/CPU) over
+                   # musicxml.com fixture images, asserting the recovered
+                   # MusicXML + an OSMD screenshot. Slow but deterministic;
+                   # downloads the v2 weights once into public/models/.
+                   # Regenerate baselines with ARGS=--update-snapshots.
 make pr-ready      # format, lint, typecheck, build, unit-test
 ```
+
+The OMR integration tests (`lib/import-image/tests/integration/import-image.spec.ts`,
+config `playwright.omr.config.ts`) run the recognition pipeline headlessly in
+Node (onnxruntime-node, CPU — `tests/integration/helpers/omr-pipeline.ts` mirrors
+`omr.worker.ts`) so the recovered MusicXML is deterministic, then render it with
+OSMD in Chromium for a screenshot. Fixtures and committed baselines live under
+`tests/integration/fixtures/` and `tests/integration/__snapshots__/`. CI runs them
+in the `omr-integration` job (separate from the editor job; caches the weights).
 
 Out-of-band OMR model-weight targets (weights are ~109 MB, gitignored, not
 committed) run inside `lib/import-image/` so their relative paths resolve:

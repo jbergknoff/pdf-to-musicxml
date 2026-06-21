@@ -8,9 +8,14 @@
 ifdef NETLIFY
 run = $(1)
 playwright = node_modules/.bin/playwright
+playwright_omr = node_modules/.bin/playwright
 else
 run = docker compose run --rm main $(1)
 playwright = docker compose run --rm playwright node_modules/.bin/playwright
+# The OMR integration tests render with OSMD via page.setContent and run
+# inference in Node, so they need no static server — skip the compose deps
+# (--no-deps) that the page-shell integration test relies on.
+playwright_omr = docker compose run --rm --no-deps playwright node_modules/.bin/playwright
 endif
 
 bun = $(call run,bun)
@@ -87,5 +92,14 @@ upload-models: node_modules
 # Not part of pr-ready: it needs the Playwright browser image.
 integration-test: build node_modules
 	$(playwright) test --config lib/import-image/playwright.config.ts
+
+# End-to-end OMR integration tests: run the real recognition pipeline in Node
+# (onnxruntime-node, CPU) over the musicxml.com fixture images and assert both
+# the recovered MusicXML and an OSMD screenshot of it. Slow (~minutes) but
+# deterministic. Downloads the v2 model weights once into public/models/ (cached
+# on disk). Not in pr-ready: needs the Playwright browser image and network for
+# the one-time weight download. Regenerate baselines with ARGS=--update-snapshots.
+omr-integration-test: node_modules
+	$(playwright_omr) test --config lib/import-image/playwright.omr.config.ts $(ARGS)
 
 pr-ready: format lint typecheck build unit-test

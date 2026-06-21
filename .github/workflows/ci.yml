@@ -20,3 +20,37 @@ jobs:
         run: make pr-ready
       - run: git diff --exit-code
       - run: make down
+
+  # End-to-end OMR integration tests: run the real recognition pipeline over the
+  # musicxml.com fixture images and assert both the recovered MusicXML and an
+  # OSMD screenshot of it (lib/import-image/tests/integration/import-image.spec.ts).
+  # Slow (~minutes) but deterministic — the pipeline runs in Node on the CPU.
+  # Kept separate from the editor job because it needs the Playwright browser
+  # image and a one-time download of the ~109 MB model weights.
+  omr-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The v2 model weights are the same the app serves from Netlify Blobs.
+      # Cache them across runs (keyed on the manifest, which changes when the
+      # MODEL_VERSION / file names do) so only the first run pays the download.
+      - name: Cache OMR model weights
+        uses: actions/cache@v4
+        with:
+          path: lib/import-image/public/models
+          key: omr-models-${{ hashFiles('lib/import-image/lib/models/manifest.ts') }}
+      - name: Pull Docker images
+        run: docker compose pull --quiet main playwright
+      - name: Install dependencies
+        run: make node_modules
+      - name: OMR integration tests
+        run: make omr-integration-test
+      - name: Upload diffs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: omr-integration-results
+          path: lib/import-image/tests/integration/results
+          if-no-files-found: ignore
+      - if: always()
+        run: make down

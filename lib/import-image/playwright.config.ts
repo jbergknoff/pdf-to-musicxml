@@ -2,6 +2,10 @@ import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: "tests/integration",
+  // The OMR end-to-end tests have their own config (playwright.omr.config.ts):
+  // they run inference in Node and need no static server, so keep them out of
+  // this (cross-origin-isolation page) run.
+  testIgnore: "**/import-image.spec.ts",
   outputDir: "tests/integration/results",
   use: {
     // BASE_URL is set to http://server:3456 inside Docker compose; falls back
