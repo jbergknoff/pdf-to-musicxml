@@ -307,19 +307,6 @@ function measureLength(beats: number, beatType: number): number {
   return (beats * DIVISIONS * 4) / beatType;
 }
 
-/**
- * Default clef for a staff whose own clef TrOMR did not recover. Only the lowest
- * staff defaults to bass; every staff above it defaults to treble. This fits both
- * the two-staff grand staff (treble over bass) and three-stave piano writing (two
- * trebles over a bass), rather than assuming the second staff is always bass.
- */
-function defaultClefForStaff(
-  staffIndex: number,
-  staffCount: number,
-): { sign: string; line: number } {
-  return staffIndex === staffCount - 1 ? { sign: "F", line: 4 } : DEFAULT_CLEF;
-}
-
 /** Opening `<attributes>` for a multi-staff part: shared key/time, a clef per staff. */
 function grandStaffAttributesXml(
   staffAttributes: (ScoreAttributes | undefined)[],
@@ -336,9 +323,16 @@ function grandStaffAttributesXml(
     `  <staves>${staffAttributes.length}</staves>`,
   ];
   for (let staffIndex = 0; staffIndex < staffAttributes.length; staffIndex++) {
-    const clef =
-      staffAttributes[staffIndex]?.clef ??
-      defaultClefForStaff(staffIndex, staffAttributes.length);
+    // The clef is never guessed: if TrOMR did not recover it, refuse to build
+    // rather than emit a plausible-but-wrong clef (see decode-attributes).
+    const clef = staffAttributes[staffIndex]?.clef;
+    if (clef === undefined) {
+      throw new Error(
+        `No clef was recognized for staff ${staffIndex + 1} of ` +
+          `${staffAttributes.length}; refusing to guess. Inspect the [omr] ` +
+          "TrOMR token logs in the console to see what was decoded.",
+      );
+    }
     lines.push(
       `  <clef number="${staffIndex + 1}"><sign>${escapeXml(clef.sign)}</sign>` +
         `<line>${clef.line}</line></clef>`,
@@ -429,13 +423,24 @@ export function buildScore(
   );
 
   if (staffCount === 1) {
+    // The opening clef is never guessed: if TrOMR did not recover it, refuse to
+    // build rather than emit a plausible-but-wrong clef. (buildMusicXML's own
+    // treble default is a convenience for low-level/test use; the OMR pipeline
+    // goes through buildScore, which enforces a recognized clef here.)
+    const firstStaff = systems[0]?.staves[0];
+    if (firstStaff !== undefined && firstStaff.attributes.clef === undefined) {
+      throw new Error(
+        "No clef was recognized for the staff; refusing to guess. Inspect the " +
+          "[omr] TrOMR token logs in the console to see what was decoded.",
+      );
+    }
     // Concatenate single-staff systems sequentially (each numbers measures from
     // 0) and reuse the single-staff builder unchanged.
     const notes = combinePages(
       systems.map((system) => system.staves[0]?.notes ?? []),
     );
     return buildMusicXML(notes, {
-      attributes: systems[0]?.staves[0]?.attributes,
+      attributes: firstStaff?.attributes,
       partName,
     });
   }

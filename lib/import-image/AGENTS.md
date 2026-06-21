@@ -156,17 +156,22 @@ Phase 3 transcription + MusicXML assembly:
   rest. Measure count is derived from the maximum `measureIndex` (not the last
   note's), since notes concatenated across staves each renumber measures from 0.
   The first measure's `<attributes>` come from the optional `BuildOptions.attributes`
-  (the first staff's recovered clef/key/time), each field defaulting to treble /
-  C major / 4/4 when TrOMR did not emit it.
+  (the first staff's recovered clef/key/time); **key/time default** to C major /
+  4/4 when TrOMR did not emit them, but the **clef is never guessed** (low-level
+  `buildMusicXML` keeps a treble default for direct/test use; the OMR pipeline
+  goes through `buildScore`, which throws — see below).
   **`buildScore(systems)`** is the multi-staff entry point: it concatenates
   `ScoreSystem`s in time order into one part. Single-staff systems flow through
   `buildMusicXML` (byte-identical output). A grand-staff system places its staves
   into `<staff>1</staff>`/`<staff>2</staff>` of the same part with `<staves>`, a
   `<clef number="n">` per staff, per-staff `<voice>`, and a `<backup>` between
   staves (sized to the prior staff's written duration); an empty staff in a
-  non-empty measure gets a whole-measure rest. The worker and the public
-  `importFile` both build via `groupSystems` → `buildScore` (the importer
-  concatenating systems across pages first).
+  non-empty measure gets a whole-measure rest. **It refuses to guess a clef:** if
+  any staff's opening clef was not recovered, `buildScore` throws (rather than
+  emit a plausible-but-wrong clef, e.g. treble/bass/bass for a three-stave piano)
+  — the editor surfaces the message and the `[omr]` TrOMR token logs show what was
+  decoded. The worker and the public `importFile` both build via `groupSystems` →
+  `buildScore` (the importer concatenating systems across pages first).
 - `lib/assembly/durations.ts` — shared duration arithmetic (divisions per
   quarter, each type's divisions, dotted length, and `BEAM_COUNT` per type) used
   by both the builder and the beam grouper (one source of truth, no import cycle).
@@ -193,6 +198,15 @@ Phase 3 transcription + MusicXML assembly:
 - `src/components/TranscriptionDebug.tsx` — collapsible per-staff panel showing
   the staff crop canvas, raw rhythm token string, and decoded note list. Helps
   verify the transcription before OSMD renders it.
+
+**Console debug logging (`[omr]` prefix):** the pipeline logs copiously to the
+JS console (worker logs show up in the page's devtools console) to diagnose bad
+output without rebuilding. `omr.worker.ts` logs the **oemer** segmentation
+output (per-class mask coverage), the detected staff geometry (count, unit size,
+each staff's lines/extent), and the brace links; `transcribe.ts` logs each
+staff's **TrOMR** output (the raw rhythm/pitch/lift token streams) and what was
+decoded from it (clef/key/time, note/measure counts). Start here when a staff
+errors out on a missing clef or comes out with the wrong one.
 
 **Execution provider split:** segmentation and the TrOMR encoder run on WebGPU
 when available. The **decoder is pinned to WASM** via `forceWasm: true` on its

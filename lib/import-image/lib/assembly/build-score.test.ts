@@ -61,6 +61,10 @@ describe("buildScore — single staff", () => {
     const secondNote = xml.indexOf("<step>D</step>");
     expect(firstNote).toBeLessThan(secondNote);
   });
+
+  it("throws rather than guess when the staff's clef was not recovered", () => {
+    expect(() => buildScore([system(staff([note("C4")]))])).toThrow(/clef/i);
+  });
 });
 
 describe("buildScore — grand staff", () => {
@@ -153,20 +157,12 @@ describe("buildScore — three-stave piano", () => {
     );
   });
 
-  it("defaults unrecovered upper staves to treble and only the lowest to bass", () => {
-    // No staff recovered a clef: a three-stave piano must come out treble /
-    // treble / bass, not treble / bass / bass.
-    const xml = buildScore([
-      system(staff([note("E5")]), staff([note("C4")]), staff([note("C3")])),
-    ]);
-    expect(xml).toContain(
-      '<clef number="1"><sign>G</sign><line>2</line></clef>',
-    );
-    expect(xml).toContain(
-      '<clef number="2"><sign>G</sign><line>2</line></clef>',
-    );
-    expect(xml).toContain(
-      '<clef number="3"><sign>F</sign><line>4</line></clef>',
-    );
+  it("throws rather than guess when a staff's clef was not recovered", () => {
+    // The middle staff recovered no clef — refuse to build instead of defaulting.
+    expect(() =>
+      buildScore([
+        system(staff([note("E5")], TREBLE), staff([note("C4")]), staff([note("C3")], BASS)),
+      ]),
+    ).toThrow(/clef/i);
   });
 });
