@@ -36,6 +36,18 @@ describe("resizeToPixelBudget", () => {
     expect(pixels).toBeGreaterThan(950_000);
     expect(pixels).toBeLessThan(1_050_000);
   });
+
+  it("scales to an explicit (higher) budget when given one", () => {
+    const image = gradientImage(2000, 1500); // 3 M px
+    const resized = resizeToPixelBudget(image, 3_000_000);
+    // Already at the 3 M px budget: returned untouched.
+    expect(resized).toBe(image);
+    // A 12 M px page is downscaled toward the 3 M px budget, not 1 M px.
+    const downscaled = resizeToPixelBudget(gradientImage(4000, 3000), 3_000_000);
+    const pixels = downscaled.width * downscaled.height;
+    expect(pixels).toBeGreaterThan(2_850_000);
+    expect(pixels).toBeLessThan(3_150_000);
+  });
 });
 
 describe("resize", () => {

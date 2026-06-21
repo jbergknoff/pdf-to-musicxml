@@ -45,11 +45,17 @@ Phase 1 segmentation (all of `lib/` is runtime-agnostic and unit-tested):
 
 - `lib/types.ts` — `RgbaImage`, `ProbabilityMap`, `Mask`, `SegmentationMasks`,
   `SegmentationModelSpec`.
-- `lib/input/preprocess.ts` — `resizeToPixelBudget` rescales pages (bilinear) to
-  a fixed pixel budget. Deliberately set *below* oemer's ~3–4.35 M px training
-  band (currently 1 M px) to trade accuracy for speed: time scales ~linearly with
-  pixels, so fewer/smaller tiles run much faster on WebGPU. It's the main
-  speed/accuracy knob — raise it back toward 3 M px to recover accuracy.
+- `lib/input/preprocess.ts` — `resizeToPixelBudget(image, targetPixels)` rescales
+  pages (bilinear) to a pixel budget. Time scales ~linearly with pixels, so the
+  budget is the main speed/accuracy knob, and it is **provider-dependent**
+  (`SEGMENTATION_PIXEL_BUDGET`, chosen in `omr.worker.ts`): **WebGPU runs at
+  ~3 M px** (oemer's training band) because it is fast enough per tile, while
+  **WASM stays at ~1 M px** (the default) since it is ~6× slower per tile. The
+  high WebGPU budget is not just for fidelity to oemer — at ~1 M px a staffline is
+  ~1px thin, right on the model's argmax decision boundary, where the WebGPU EP's
+  numerical differences from WASM drop enough line pixels to lose whole staves;
+  ~3 M px thickens the lines off that boundary. Validate budget changes with
+  `make compare-resolutions`.
 - `lib/segmentation/tiling.ts` — sliding-window tile geometry + overlap-averaging
   accumulator (mirrors oemer's `inference()`).
 - `lib/segmentation/unet-session.ts` — drives one model over a page in batches
@@ -214,12 +220,20 @@ session — ORT's WebGPU EP does not support the fused `SkipLayerNormalization`
 op the decoder uses, and its many tiny autoregressive steps are dominated by
 per-dispatch latency on WebGPU anyway. `InferenceBackend.createSession` accepts
 an optional `CreateSessionOptions { forceWasm?: boolean }` for this.
+**WASM is the reference path** — `scripts/optimize-models.py` asserts the served
+weights match the original oemer release numerically on the CPU/WASM runtime, so
+WASM reproduces oemer's published accuracy and WebGPU is a faster *approximation*
+of it. The EPs are not bit-identical (different kernels/precision); the
+`seg_net` model is stable across them, but the thin-line `unet_big` staff model
+is sensitive, which is why the WebGPU budget is raised (see Resolution split) to
+keep its accuracy on par.
 
-**Resolution split:** segmentation runs on `resizeToPixelBudget(image)` (~1 Mpx)
-for speed. TrOMR crops from the **full-resolution image** — the transformer was
-trained on full-res staves, and blurring at 1 Mpx degrades notehead detection.
-Staff coordinates detected in the segmentation-resolution space are scaled to
-full-res in the worker before cropping.
+**Resolution split:** segmentation runs on `resizeToPixelBudget(image, budget)`
+at a **provider-dependent** budget (~3 Mpx on WebGPU, ~1 Mpx on WASM — see
+`lib/input/preprocess.ts`). TrOMR crops from the **full-resolution image** — the
+transformer was trained on full-res staves, and blurring degrades notehead
+detection. Staff coordinates detected in the segmentation-resolution space are
+scaled to full-res in the worker before cropping.
 
 Worker (responsiveness — model loading + inference + staff detection + TrOMR
 transcription run off the main thread so the heavy WASM pass never freezes the UI):

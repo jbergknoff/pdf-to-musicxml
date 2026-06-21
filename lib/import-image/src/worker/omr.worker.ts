@@ -1,5 +1,8 @@
 import { MODEL_MANIFEST } from "../../lib/models/manifest";
-import { resizeToPixelBudget } from "../../lib/input/preprocess";
+import {
+  resizeToPixelBudget,
+  SEGMENTATION_PIXEL_BUDGET,
+} from "../../lib/input/preprocess";
 import type { InferenceBackend } from "../../lib/runtime/inference-backend";
 import {
   type SegmentationModels,
@@ -160,10 +163,21 @@ async function process(
   // shrinking them blurs noteheads and stafflines together. Detected staff
   // coordinates live in the segmentation image's space and are scaled up to the
   // full image before cropping.
-  const segImage: RgbaImage = resizeToPixelBudget(image);
+  //
+  // The budget is provider-dependent: WebGPU is fast enough per tile to run at
+  // oemer's training resolution (~3 Mpx), which keeps thin stafflines off the
+  // argmax decision boundary where the WebGPU EP otherwise diverges from WASM
+  // and loses staves; WASM stays at the lower budget to bound its much slower
+  // per-tile time.
+  const pixelBudget =
+    backend.provider === "webgpu"
+      ? SEGMENTATION_PIXEL_BUDGET.webgpu
+      : SEGMENTATION_PIXEL_BUDGET.wasm;
+  const segImage: RgbaImage = resizeToPixelBudget(image, pixelBudget);
   console.info(
     `[omr] input: ${image.width}×${image.height} (${((image.width * image.height) / 1e6).toFixed(1)} Mpx), ` +
-      `seg: ${segImage.width}×${segImage.height}`,
+      `seg: ${segImage.width}×${segImage.height} ` +
+      `(budget ${(pixelBudget / 1e6).toFixed(1)} Mpx, ${backend.provider})`,
   );
 
   // The optimized weights bake a fixed batch into the graph, so the batch is

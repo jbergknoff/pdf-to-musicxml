@@ -11,26 +11,42 @@ import type { RgbaImage } from "../types";
  * the budget and tiny ones upscaled to it; pages already at it pass untouched.
  */
 
-// 1 M px — well under oemer's 3 M px training floor. This is a speed/accuracy
-// knob: lower is faster (fewer tiles) but shrinks notation relative to the
-// model's receptive field, so very small symbols start to be missed. Raise it
-// back toward 3 M px to recover accuracy at the cost of speed.
-const MINIMUM_PIXELS = 1_000_000;
-const MAXIMUM_PIXELS = 1_000_000;
-const TARGET_PIXELS = 1_000_000;
+// Segmentation pixel budgets, chosen per inference provider. Segmentation time
+// scales ~linearly with pixel count (tiles per page), so the budget is the main
+// speed/accuracy knob.
+//
+// At a low budget a staffline is only ~1px thin — right on the model's argmax
+// decision boundary, where the WebGPU EP's small numerical differences from WASM
+// drop enough line pixels to lose whole staves (see AGENTS.md "Execution
+// provider split"). A higher budget thickens the lines off that boundary and
+// puts the page back in oemer's ~3–4.35 M px training band. WebGPU is fast enough
+// per tile to afford that; WASM (~6× slower per tile) is not, so it stays at the
+// speed-compromised budget.
+export const SEGMENTATION_PIXEL_BUDGET = {
+  webgpu: 3_000_000,
+  wasm: 1_000_000,
+} as const;
+
+// Default budget for callers that do not pass one (e.g. tests, the resolution
+// comparison harness). Matches the WASM budget — the conservative, fast floor.
+const DEFAULT_PIXEL_BUDGET = SEGMENTATION_PIXEL_BUDGET.wasm;
 
 /**
- * Rescale `image` so its pixel count lands in oemer's training band. Returns the
- * original image unchanged when it is already within `[MINIMUM_PIXELS,
- * MAXIMUM_PIXELS]`; otherwise scales both dimensions by a single ratio toward
- * `TARGET_PIXELS` using bilinear sampling.
+ * Rescale `image` so its pixel count lands at `targetPixels` (oemer's training
+ * band is ~3–4.35 M px). Returns the original image unchanged when it is already
+ * at the target; otherwise scales both dimensions by a single ratio using
+ * bilinear sampling. The budget is provider-dependent — see
+ * {@link SEGMENTATION_PIXEL_BUDGET}.
  */
-export function resizeToPixelBudget(image: RgbaImage): RgbaImage {
+export function resizeToPixelBudget(
+  image: RgbaImage,
+  targetPixels: number = DEFAULT_PIXEL_BUDGET,
+): RgbaImage {
   const pixels = image.width * image.height;
-  if (pixels >= MINIMUM_PIXELS && pixels <= MAXIMUM_PIXELS) {
+  if (pixels === targetPixels) {
     return image;
   }
-  const ratio = Math.sqrt(TARGET_PIXELS / pixels);
+  const ratio = Math.sqrt(targetPixels / pixels);
   const targetWidth = Math.max(1, Math.round(image.width * ratio));
   const targetHeight = Math.max(1, Math.round(image.height * ratio));
   return resize(image, targetWidth, targetHeight);
