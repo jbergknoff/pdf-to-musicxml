@@ -54,6 +54,20 @@ export interface Note {
   /** Chromatic alteration in semitones (sharp +1, flat −1). */
   alter: number;
   octave: number;
+  /** The (printed) measure number this note belongs to, so a difference can
+   * say *where* a note was missed/wrong, not just how many. */
+  measure: number;
+}
+
+/** Render a note as a compact pitch token, e.g. {C,+1,5} → "C#5", {B,−1,4} → "Bb4". */
+export function formatPitch(note: Note): string {
+  const accidental =
+    note.alter > 0
+      ? "#".repeat(note.alter)
+      : note.alter < 0
+        ? "b".repeat(-note.alter)
+        : "";
+  return `${note.step}${accidental}${note.octave}`;
 }
 
 export interface Score {
@@ -71,23 +85,34 @@ export interface Score {
 export function parseScore(xml: string): Score {
   const document = new DOMParser().parseFromString(xml, "text/xml");
 
+  // Walk measures (not all notes at once) so each note carries its measure
+  // number — the source's printed number when present, else its ordinal.
   const notes: Note[] = [];
-  for (const noteEl of Array.from(document.querySelectorAll("note"))) {
-    const pitchEl = noteEl.querySelector("pitch");
-    if (!pitchEl) {
-      continue;
+  const measureEls = Array.from(document.querySelectorAll("measure"));
+  for (let index = 0; index < measureEls.length; index++) {
+    const measureEl = measureEls[index];
+    const measure = Number.parseInt(
+      measureEl.getAttribute("number") ?? `${index + 1}`,
+      10,
+    );
+    for (const noteEl of Array.from(measureEl.querySelectorAll("note"))) {
+      const pitchEl = noteEl.querySelector("pitch");
+      if (!pitchEl) {
+        continue;
+      }
+      notes.push({
+        step: pitchEl.querySelector("step")?.textContent ?? "?",
+        alter: Number.parseInt(
+          pitchEl.querySelector("alter")?.textContent ?? "0",
+          10,
+        ),
+        octave: Number.parseInt(
+          pitchEl.querySelector("octave")?.textContent ?? "0",
+          10,
+        ),
+        measure,
+      });
     }
-    notes.push({
-      step: pitchEl.querySelector("step")?.textContent ?? "?",
-      alter: Number.parseInt(
-        pitchEl.querySelector("alter")?.textContent ?? "0",
-        10,
-      ),
-      octave: Number.parseInt(
-        pitchEl.querySelector("octave")?.textContent ?? "0",
-        10,
-      ),
-    });
   }
 
   const beats = document.querySelector("time beats")?.textContent;
@@ -118,17 +143,21 @@ export function parseScore(xml: string): Score {
 
 // ── Pitch alignment ────────────────────────────────────────────────────────
 
+/** A source note aligned to a recovered note of the same step + octave. */
+export interface NotePair {
+  source: Note;
+  recovered: Note;
+}
+
 export interface NoteAlignment {
-  /** Same step + octave (accidental ignored). */
-  matched: number;
-  /** Of `matched`, how many also share the same alter. */
-  accidentalMatched: number;
-  /** Aligned to a note of a different pitch. */
-  substitutions: number;
+  /** Aligned to a recovered note of the same step + octave (accidental may still differ). */
+  matched: NotePair[];
+  /** Aligned to a recovered note of a different pitch (a wrong note). */
+  substitutions: NotePair[];
   /** In source, missing from recovered (a dropped note). */
-  deletions: number;
+  deletions: Note[];
   /** In recovered, absent from source (a spurious note). */
-  insertions: number;
+  insertions: Note[];
 }
 
 function samePitch(a: Note, b: Note): boolean {
@@ -138,7 +167,8 @@ function samePitch(a: Note, b: Note): boolean {
 // Needleman–Wunsch global alignment over the two pitch streams (match +1,
 // substitution/insertion/deletion −1), then a backtrace that classifies every
 // column so "wrong note" (substitution), "missed note" (deletion), and "spurious
-// note" (insertion) come out separately.
+// note" (insertion) come out separately — each carrying the actual notes so we
+// can report *which* note, and in which measure, not just a count.
 export function alignNotes(source: Note[], recovered: Note[]): NoteAlignment {
   const n = source.length;
   const m = recovered.length;
@@ -161,11 +191,10 @@ export function alignNotes(source: Note[], recovered: Note[]): NoteAlignment {
   }
 
   const alignment: NoteAlignment = {
-    matched: 0,
-    accidentalMatched: 0,
-    substitutions: 0,
-    deletions: 0,
-    insertions: 0,
+    matched: [],
+    substitutions: [],
+    deletions: [],
+    insertions: [],
   };
   let i = n;
   let j = m;
@@ -177,21 +206,19 @@ export function alignNotes(source: Note[], recovered: Note[]): NoteAlignment {
         ? score[i - 1][j - 1] + (matched ? 1 : -1)
         : Number.NEGATIVE_INFINITY;
     if (i > 0 && j > 0 && score[i][j] === diagonal) {
+      const pair = { source: source[i - 1], recovered: recovered[j - 1] };
       if (matched) {
-        alignment.matched++;
-        if (source[i - 1].alter === recovered[j - 1].alter) {
-          alignment.accidentalMatched++;
-        }
+        alignment.matched.push(pair);
       } else {
-        alignment.substitutions++;
+        alignment.substitutions.push(pair);
       }
       i--;
       j--;
     } else if (i > 0 && (j === 0 || score[i][j] === score[i - 1][j] - 1)) {
-      alignment.deletions++;
+      alignment.deletions.push(source[i - 1]);
       i--;
     } else {
-      alignment.insertions++;
+      alignment.insertions.push(recovered[j - 1]);
       j--;
     }
   }
@@ -200,16 +227,47 @@ export function alignNotes(source: Note[], recovered: Note[]): NoteAlignment {
 
 // ── Differences ─────────────────────────────────────────────────────────────
 
+// Attribute-level differences are singletons per score (each kind appears at
+// most once); note-level differences are per-note and carry the pitch + measure
+// so each one names *which* note, in *which* measure, differs.
 export type Difference =
   | { kind: "key"; source: number; recovered: number }
   | { kind: "time-signature"; source: string; recovered: string }
   | { kind: "clef-count"; source: number; recovered: number }
   | { kind: "clefs"; source: string; recovered: string }
   | { kind: "measure-count"; source: number; recovered: number }
-  | { kind: "missed-notes"; count: number }
-  | { kind: "wrong-notes"; count: number }
-  | { kind: "spurious-notes"; count: number }
-  | { kind: "wrong-accidentals"; count: number };
+  | { kind: "missed-note"; measure: number; pitch: string }
+  | { kind: "wrong-note"; measure: number; source: string; recovered: string }
+  | { kind: "spurious-note"; measure: number; pitch: string }
+  | {
+      kind: "wrong-accidental";
+      measure: number;
+      source: string;
+      recovered: string;
+    };
+
+const ATTRIBUTE_KINDS = new Set<Difference["kind"]>([
+  "key",
+  "time-signature",
+  "clef-count",
+  "clefs",
+  "measure-count",
+]);
+
+// Deterministic order for the per-note differences so the codified list is
+// stable: by measure, then by the pitch string(s) involved.
+function noteSortKey(difference: Difference): string {
+  switch (difference.kind) {
+    case "missed-note":
+    case "spurious-note":
+      return `${String(difference.measure).padStart(4, "0")}|${difference.pitch}`;
+    case "wrong-note":
+    case "wrong-accidental":
+      return `${String(difference.measure).padStart(4, "0")}|${difference.source}|${difference.recovered}`;
+    default:
+      return "";
+  }
+}
 
 /** Every way the recovered score currently differs from the source. */
 export function computeDifferences(
@@ -253,22 +311,43 @@ export function computeDifferences(
     });
   }
 
-  const notes = alignNotes(source.notes, recovered.notes);
-  if (notes.deletions > 0) {
-    differences.push({ kind: "missed-notes", count: notes.deletions });
+  const alignment = alignNotes(source.notes, recovered.notes);
+  const noteDifferences: Difference[] = [];
+  for (const note of alignment.deletions) {
+    noteDifferences.push({
+      kind: "missed-note",
+      measure: note.measure,
+      pitch: formatPitch(note),
+    });
   }
-  if (notes.substitutions > 0) {
-    differences.push({ kind: "wrong-notes", count: notes.substitutions });
+  for (const { source: from, recovered: to } of alignment.substitutions) {
+    noteDifferences.push({
+      kind: "wrong-note",
+      measure: from.measure,
+      source: formatPitch(from),
+      recovered: formatPitch(to),
+    });
   }
-  if (notes.insertions > 0) {
-    differences.push({ kind: "spurious-notes", count: notes.insertions });
+  for (const note of alignment.insertions) {
+    noteDifferences.push({
+      kind: "spurious-note",
+      measure: note.measure,
+      pitch: formatPitch(note),
+    });
   }
-  const wrongAccidentals = notes.matched - notes.accidentalMatched;
-  if (wrongAccidentals > 0) {
-    differences.push({ kind: "wrong-accidentals", count: wrongAccidentals });
+  for (const { source: from, recovered: to } of alignment.matched) {
+    if (from.alter !== to.alter) {
+      noteDifferences.push({
+        kind: "wrong-accidental",
+        measure: from.measure,
+        source: formatPitch(from),
+        recovered: formatPitch(to),
+      });
+    }
   }
+  noteDifferences.sort((a, b) => noteSortKey(a).localeCompare(noteSortKey(b)));
 
-  return differences;
+  return [...differences, ...noteDifferences];
 }
 
 function describe(difference: Difference): string {
@@ -283,14 +362,14 @@ function describe(difference: Difference): string {
       return `clefs: source ${difference.source}, recovered ${difference.recovered}`;
     case "measure-count":
       return `measure count: source ${difference.source}, recovered ${difference.recovered}`;
-    case "missed-notes":
-      return `${difference.count} note(s) in the source missing from the recovery`;
-    case "wrong-notes":
-      return `${difference.count} note(s) recovered at the wrong pitch`;
-    case "spurious-notes":
-      return `${difference.count} note(s) recovered that are not in the source`;
-    case "wrong-accidentals":
-      return `${difference.count} recovered note(s) with the wrong accidental`;
+    case "missed-note":
+      return `missed ${difference.pitch} (source m${difference.measure})`;
+    case "wrong-note":
+      return `wrong note: recovered ${difference.recovered} where source has ${difference.source} (m${difference.measure})`;
+    case "spurious-note":
+      return `spurious ${difference.pitch} (m${difference.measure})`;
+    case "wrong-accidental":
+      return `wrong accidental: recovered ${difference.recovered} where source has ${difference.source} (m${difference.measure})`;
   }
 }
 
@@ -307,14 +386,25 @@ export interface Affordance {
   expected: Difference;
 }
 
-// Two differences describe the same subject (so one can update the other) when
-// they share a kind — every difference kind appears at most once per score.
-function sameSubject(a: Difference, b: Difference): boolean {
-  return a.kind === b.kind;
-}
-
 function equal(a: Difference, b: Difference): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+// Two differences describe the same subject — so an affordance for one can
+// report the other as a "stale" update rather than as separate obsolete +
+// uncodified problems. Attribute-level differences are singletons per score, so
+// sharing a kind is enough. Note-level differences are per-note, so the subject
+// is the whole note (pitch + measure): a missed note that moved or changed pitch
+// is a *different* subject (the old affordance is obsolete, the new one
+// uncodified), which is the clearer report.
+function sameSubject(a: Difference, b: Difference): boolean {
+  if (a.kind !== b.kind) {
+    return false;
+  }
+  if (ATTRIBUTE_KINDS.has(a.kind)) {
+    return true;
+  }
+  return equal(a, b);
 }
 
 /**
@@ -411,32 +501,44 @@ export const codify = {
       expected: { kind: "measure-count", source, recovered },
     };
   },
-  missedNotes(count: number): Affordance {
+  /** A source note the OMR failed to find. `pitch` like "C5"/"Bb4". */
+  missedNote(measure: number, pitch: string): Affordance {
     return {
-      id: `missed-notes ×${count}`,
-      reason: "Notehead recall is below 100% on dense staves.",
-      expected: { kind: "missed-notes", count },
+      id: `missed ${pitch} (m${measure})`,
+      reason:
+        "Notehead recall is below 100% on dense staves — this source note was " +
+        "not found.",
+      expected: { kind: "missed-note", measure, pitch },
     };
   },
-  wrongNotes(count: number): Affordance {
+  /** A source note recovered at the wrong pitch (staff position). */
+  wrongNote(measure: number, source: string, recovered: string): Affordance {
     return {
-      id: `wrong-notes ×${count}`,
-      reason: "Some noteheads are recovered at the wrong pitch (staff position).",
-      expected: { kind: "wrong-notes", count },
+      id: `wrong note m${measure} ${source}→${recovered}`,
+      reason:
+        "This source note was recovered at the wrong pitch (wrong staff " +
+        "position).",
+      expected: { kind: "wrong-note", measure, source, recovered },
     };
   },
-  spuriousNotes(count: number): Affordance {
+  /** A note the recovery invented; the source has nothing matching it. */
+  spuriousNote(measure: number, pitch: string): Affordance {
     return {
-      id: `spurious-notes ×${count}`,
-      reason: "The recovery invents notes the source does not contain.",
-      expected: { kind: "spurious-notes", count },
+      id: `spurious ${pitch} (m${measure})`,
+      reason: "The recovery invents this note; the source has nothing here.",
+      expected: { kind: "spurious-note", measure, pitch },
     };
   },
-  wrongAccidentals(count: number): Affordance {
+  /** A matched note (right step + octave) carrying the wrong accidental. */
+  wrongAccidental(
+    measure: number,
+    source: string,
+    recovered: string,
+  ): Affordance {
     return {
-      id: `wrong-accidentals ×${count}`,
-      reason: "Some matched notes carry the wrong accidental (TrOMR lift error).",
-      expected: { kind: "wrong-accidentals", count },
+      id: `wrong accidental m${measure} ${source}→${recovered}`,
+      reason: "Matched note carries the wrong accidental (TrOMR lift error).",
+      expected: { kind: "wrong-accidental", measure, source, recovered },
     };
   },
 };

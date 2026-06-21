@@ -12,9 +12,9 @@ matches that list **exactly**, which ratchets in both directions:
 - an **uncodified** difference fails the test — a regression, or a real
   difference nobody accounted for; and
 - an affordance that **no longer matches** an actual difference *also* fails —
-  the OMR improved past it, so the affordance must be deleted (or its count
-  tightened). Improving the OMR is meant to feel like: make it better → a
-  now-unnecessary affordance trips → delete it → the bar is permanently higher.
+  the OMR improved past it, so the affordance must be deleted (or updated).
+  Improving the OMR is meant to feel like: make it better → a now-unnecessary
+  affordance trips → delete it → the bar is permanently higher.
 
 ## What is compared
 
@@ -22,6 +22,14 @@ The ordered stream of pitched notes (step + octave, accidentals checked
 separately) and the document attributes: key, time signature, clefs, measure
 count. Notes are aligned with Needleman–Wunsch so "wrong pitch", "missed", and
 "spurious" come out separately.
+
+Each note-level affordance names the **specific note and its measure**, not just
+a count — `codify.missedNote(98, "A2")` (a source A2 in measure 98 the OMR never
+found), `codify.wrongNote(100, "A2", "F#5")` (source A2 read as F#5),
+`codify.spuriousNote(1, "A6")`, `codify.wrongAccidental(13, "Bb3", "B3")`.
+Measures are the source's measure numbers, so a failure points at exactly which
+note in which bar regressed (or improved past its affordance). The per-fixture
+totals in the table below are just the lengths of those per-note lists.
 
 ## What is deliberately not compared (stripped, not ratcheted)
 
