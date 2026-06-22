@@ -8,7 +8,10 @@ import type { OmrConfig } from "./worker/protocol";
 // backend. The page must be cross-origin isolated for ORT Web's threaded WASM
 // backend (see scripts/serve.ts).
 
-const DEFAULT_CONFIG: OmrConfig = { backend: "auto" };
+const DEFAULT_CONFIG: OmrConfig = {
+  backend: "auto",
+  staffDetection: "classical",
+};
 
 /**
  * Owns the OMR config and the worker it drives. Changing the config recreates

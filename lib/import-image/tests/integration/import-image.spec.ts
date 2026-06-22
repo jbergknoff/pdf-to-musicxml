@@ -79,29 +79,30 @@ function fixtureNames(): string[] {
 const EXPECTED_DIFFERENCES: Record<string, Affordance[]> = {
   chant: [codify.timeSignature("senza-misura", "4/4")],
   saltarello: [codify.timeSignature("6/8", "4/4")],
+  // Recovered via the default classical (model-free) staff detection — see the
+  // staffDetection note below. (This list differs slightly from the oemer-mask
+  // recovery; the classical staff crop drops the two spurious ledger notes and a
+  // wrong accidental the model produced.)
   "mozart-piano-sonata": [
     codify.timeSignature("2/4", "4/4"),
-    codify.spuriousNote(1, "A6"),
-    codify.spuriousNote(3, "F6"),
     codify.missedNote(98, "A2"),
     codify.wrongNote(98, "C#3", "E5"),
     codify.missedNote(98, "C#5"),
-    codify.wrongAccidental(98, "C#6", "C6"),
     codify.wrongNote(98, "E3", "C#5"),
     codify.missedNote(98, "E5"),
     codify.missedNote(99, "A2"),
     codify.missedNote(99, "C#3"),
     codify.missedNote(99, "E3"),
     codify.wrongNote(100, "A2", "F#5"),
+    codify.missedNote(100, "A5"),
     codify.missedNote(100, "D2"),
-    codify.missedNote(100, "D6"),
-    codify.missedNote(100, "F#2"),
-    codify.wrongNote(100, "F#5", "C6"),
+    codify.wrongNote(100, "F#2", "A5"),
+    codify.missedNote(100, "F#5"),
     codify.missedNote(101, "A2"),
     codify.missedNote(101, "A5"),
     codify.missedNote(101, "A5"),
     codify.missedNote(101, "A5"),
-    codify.wrongNote(101, "A5", "E6"),
+    codify.missedNote(101, "A5"),
     codify.wrongNote(101, "C#3", "A5"),
     codify.missedNote(101, "D6"),
     codify.wrongNote(101, "D6", "A5"),
@@ -109,11 +110,11 @@ const EXPECTED_DIFFERENCES: Record<string, Affordance[]> = {
     codify.wrongNote(101, "D6", "A5"),
     codify.wrongNote(101, "E3", "E5"),
     codify.missedNote(101, "E5"),
-    codify.wrongNote(102, "B2", "E5"),
+    codify.wrongNote(102, "B2", "E6"),
     codify.missedNote(102, "E2"),
     codify.missedNote(102, "E5"),
     codify.missedNote(102, "E6"),
-    codify.missedNote(102, "G#2"),
+    codify.wrongNote(102, "G#2", "E5"),
   ],
   // binchois is currently skipped (below); these are kept ready for when the
   // pipeline improves enough to unskip it. The list is long on purpose — it is
@@ -269,6 +270,7 @@ for (const name of fixtureNames()) {
     test.setTimeout(5 * 60 * 1000);
 
     const image = decodeImageFile(join(FIXTURES_DIRECTORY, `${name}.png`));
+    // Exercises the pipeline's default classical (model-free) staff detection.
     const result = await recognizeImage(image, models);
 
     // The pipeline recovered something (guards against a silent empty result).

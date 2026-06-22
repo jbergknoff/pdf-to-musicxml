@@ -8,9 +8,17 @@ import {
   type SegmentationModels,
   segment,
 } from "../../lib/segmentation/segment";
+import { classicalStaffMask } from "../../lib/staves/classical-staff-mask";
 import { detectStaves } from "../../lib/staves/detect-staves";
 import { detectBraces } from "../../lib/staves/brace-detection";
-import type { Mask, RgbaImage, Staff } from "../../lib/types";
+import type {
+  Mask,
+  RgbaImage,
+  SegmentationMasks,
+  Staff,
+  StaffStructure,
+  Transcription,
+} from "../../lib/types";
 import { buildScore } from "../../lib/assembly/musicxml-builder";
 import { groupSystems } from "../../lib/staves/system-grouping";
 import { transcribeStaves } from "../../lib/transcription/transcribe";
@@ -135,6 +143,30 @@ function getTrOMR(
   return tromrPromise;
 }
 
+/** An all-zero mask of the given size (a placeholder symbol layer). */
+function emptyMask(width: number, height: number): Mask {
+  return { data: new Uint8Array(width * height), width, height };
+}
+
+/**
+ * Wrap a classically-derived staff mask in the {@link SegmentationMasks} shape
+ * the result message carries. The symbol layers the model would supply are not
+ * computed on the classical path (it never runs `seg_net`), so they are empty —
+ * the page overlay simply has nothing to draw for them.
+ */
+function masksFromStaff(staffMask: Mask): SegmentationMasks {
+  const { width, height } = staffMask;
+  return {
+    width,
+    height,
+    staff: staffMask,
+    symbols: emptyMask(width, height),
+    stemsRests: emptyMask(width, height),
+    noteheads: emptyMask(width, height),
+    clefsKeys: emptyMask(width, height),
+  };
+}
+
 /**
  * Scale a detected staff from segmentation-image coordinates into the
  * full-resolution image's coordinates. Horizontal extents scale by the width
@@ -155,7 +187,6 @@ async function process(
   image: ProcessRequest["image"],
 ) {
   const backend = await getBackend(config);
-  const models = await getModels(backend, requestId);
 
   // Segmentation runs on a downscaled copy for speed (the pixel budget is the
   // main speed/accuracy knob), but TrOMR transcription crops from the full
@@ -185,33 +216,61 @@ async function process(
   // tiles per inference.
   const batchSize = FIXED_BATCH_SIZE;
 
-  // Lightweight perf instrumentation: the segmentation pass is the dominant
-  // cost, so log the page size, provider, and wall-clock per phase to find the
-  // bottleneck without a profiler.
-  const segmentStart = performance.now();
-  const masks = await segment(segImage, models, {
-    batchSize,
-    onProgress: (fraction) => {
-      post({ type: "progress", requestId, phase: "segmenting", fraction });
-    },
-  });
-  const segmentMs = performance.now() - segmentStart;
+  // Run the oemer staff/symbol segmentation model over the page, logging its
+  // per-class coverage. Loads the ~70 MB unet weights on first use, so it is
+  // only invoked when the configured/needed staff-detection path requires it.
+  const runModel = async (): Promise<SegmentationMasks> => {
+    const models = await getModels(backend, requestId);
+    const segmentStart = performance.now();
+    const result = await segment(segImage, models, {
+      batchSize,
+      onProgress: (fraction) => {
+        post({ type: "progress", requestId, phase: "segmenting", fraction });
+      },
+    });
+    segmentMs = performance.now() - segmentStart;
+    console.info(
+      `[omr] oemer masks ${result.width}×${result.height}: ` +
+        `staff ${maskCoverage(result.staff)}, symbols ${maskCoverage(result.symbols)}, ` +
+        `stems/rests ${maskCoverage(result.stemsRests)}, ` +
+        `noteheads ${maskCoverage(result.noteheads)}, ` +
+        `clefs/keys ${maskCoverage(result.clefsKeys)}`,
+    );
+    return result;
+  };
 
-  // Copious oemer (segmentation) output logging: per-class set-pixel coverage on
-  // the downscaled page. Low staff/notehead coverage explains missed staves or
-  // notes downstream.
-  console.info(
-    `[omr] oemer masks ${masks.width}×${masks.height}: ` +
-      `staff ${maskCoverage(masks.staff)}, symbols ${maskCoverage(masks.symbols)}, ` +
-      `stems/rests ${maskCoverage(masks.stemsRests)}, ` +
-      `noteheads ${maskCoverage(masks.noteheads)}, ` +
-      `clefs/keys ${maskCoverage(masks.clefsKeys)}`,
-  );
-
+  // Locate stafflines. The classical (model-free) path is the default for clean
+  // born-digital scores; it skips segmentation entirely, falling back to the
+  // model only when it finds no staves. "model" always uses the oemer mask.
   post({ type: "progress", requestId, phase: "detecting-staves", fraction: 1 });
-  const stavesStart = performance.now();
-  const staves = detectStaves(masks.staff);
-  const stavesMs = performance.now() - stavesStart;
+  let masks: SegmentationMasks;
+  let staves: StaffStructure;
+  let staffMethod: string;
+  let segmentMs = 0;
+  let stavesMs = 0;
+  if (config.staffDetection === "classical") {
+    const staffMask = classicalStaffMask(segImage);
+    const stavesStart = performance.now();
+    staves = detectStaves(staffMask);
+    stavesMs = performance.now() - stavesStart;
+    if (staves.staves.length > 0) {
+      masks = masksFromStaff(staffMask);
+      staffMethod = "classical";
+    } else {
+      masks = await runModel();
+      const fallbackStart = performance.now();
+      staves = detectStaves(masks.staff);
+      stavesMs = performance.now() - fallbackStart;
+      staffMethod = "classical→model (no staves found classically)";
+    }
+  } else {
+    masks = await runModel();
+    const stavesStart = performance.now();
+    staves = detectStaves(masks.staff);
+    stavesMs = performance.now() - stavesStart;
+    staffMethod = "model";
+  }
+  console.info(`[omr] staff detection: ${staffMethod}`);
 
   // Log the detected staff geometry (segmentation-image space): a wrong staff
   // count or unit size is the first suspect for bad crops and transcription.
@@ -242,7 +301,7 @@ async function process(
   );
 
   let musicXml = "";
-  let transcriptions: import("../../lib/types").Transcription[] = [];
+  let transcriptions: Transcription[] = [];
   if (staves.staves.length > 0) {
     const tromrSessions = await getTrOMR(backend, requestId);
     post({ type: "progress", requestId, phase: "transcribing", fraction: 0 });
@@ -307,7 +366,10 @@ let config: OmrConfig | null = null;
 workerScope.addEventListener("message", (event) => {
   const request = event.data;
   if (request.type === "config") {
-    config = { backend: request.backend };
+    config = {
+      backend: request.backend,
+      staffDetection: request.staffDetection,
+    };
     // Resolve the backend now so the UI can show the provider before any drop.
     getBackend(config).then((backend) => {
       post({ type: "ready", provider: backend.provider });

@@ -17,14 +17,24 @@ import { groupSystems } from "./lib/staves/system-grouping";
 import type { ScoreSystem } from "./lib/types";
 import { decodeFilePages, isPdf } from "./src/input/decode";
 import { createOmrClient } from "./src/worker/omr-client";
-import type { BackendChoice, ProgressUpdate } from "./src/worker/protocol";
+import type {
+  BackendChoice,
+  ProgressUpdate,
+  StaffDetectionMode,
+} from "./src/worker/protocol";
 
 export { isPdf };
-export type { BackendChoice, ProgressUpdate };
+export type { BackendChoice, ProgressUpdate, StaffDetectionMode };
 
 export interface ImageImporterOptions {
   /** Inference provider; "auto" (default) picks WebGPU when an adapter works. */
   backend?: BackendChoice;
+  /**
+   * How to locate stafflines; "classical" (default) is the fast, weight-free
+   * Otsu + run-length path for born-digital scores, falling back to the model
+   * when it finds no staves. "model" always uses the oemer staff mask.
+   */
+  staffDetection?: StaffDetectionMode;
 }
 
 /**
@@ -51,7 +61,10 @@ export interface ImageImporter {
 export async function createImageImporter(
   options: ImageImporterOptions = {},
 ): Promise<ImageImporter> {
-  const client = await createOmrClient({ backend: options.backend ?? "auto" });
+  const client = await createOmrClient({
+    backend: options.backend ?? "auto",
+    staffDetection: options.staffDetection ?? "classical",
+  });
   return {
     provider: client.provider,
     async importFile(file, onProgress) {
@@ -98,7 +111,10 @@ export async function imageToMusicXml(
     onProgress?: (update: ProgressUpdate) => void;
   } = {},
 ): Promise<string> {
-  const importer = await createImageImporter({ backend: options.backend });
+  const importer = await createImageImporter({
+    backend: options.backend,
+    staffDetection: options.staffDetection,
+  });
   try {
     return await importer.importFile(file, options.onProgress);
   } finally {

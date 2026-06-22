@@ -90,6 +90,17 @@ Phase 2 staff structure (pure algorithm in `lib/staves/`, fully unit-tested):
   size, cut the lines into five-line staves (new staff at a large gap or every
   fifth line), drop non-five-line groups, and measure each staff's horizontal
   extent from a vertical projection over its own row band.
+- `lib/staves/classical-staff-mask.ts` — `classicalStaffMask(image)` builds the
+  staff mask **without a model**, a drop-in for the oemer `unet_big` staff mask
+  that feeds `detectStaves`: Otsu binarize, estimate the staff space from the
+  most common vertical white-run (the classic OMR reference length), then keep
+  ink only in horizontal runs longer than a small multiple of that space (so
+  stafflines survive and noteheads/stems/beams/text do not). For born-digital
+  scores it recovers the same staves as the UNet in ~20 ms instead of ~15–37 s,
+  and lets the pipeline skip segmentation entirely. This is the **default**
+  staff-detection path (`OmrConfig.staffDetection: "classical"`), with the UNet
+  as fallback (used when classical finds no staves, or when set to `"model"` for
+  photos/skew). Validated against the OMR integration fixtures.
 - `lib/staves/brace-detection.ts` — `detectBraces(image, staves)` returns the
   per-adjacent-pair brace links (length `staves.length − 1`) that drive grouping.
   The cue is image-based: for each pair it scans a narrow column band just left of
@@ -240,7 +251,13 @@ transcription run off the main thread so the heavy WASM pass never freezes the U
 
 - `src/worker/omr.worker.ts` — owns the inference backend and model weights. It
   waits for a `config` message before resolving its provider, then per request
-  runs `segment` (on the downscaled image) → `detectStaves` → `detectBraces` (on
+  locates stafflines by `config.staffDetection`: **`"classical"` (default)** runs
+  `classicalStaffMask` → `detectStaves` and **skips `segment` entirely** (the
+  ~70 MB unet weights load only on the model path), falling back to the model if
+  no staves are found; **`"model"`** runs `segment` (on the downscaled image) →
+  `detectStaves`. On the classical path the result's `masks` carries the
+  classical staff mask with empty symbol layers (the overlay simply has nothing
+  to draw for them). Then per request it runs `detectBraces` (on
   the same downscaled image, in staff-coordinate space) → `transcribeStaves` (on
   the full-resolution image, with staff coordinates scaled up) → `groupSystems`
   (brace links primary, clefs fallback) → `buildScore`, streaming phase/fraction
@@ -251,7 +268,8 @@ transcription run off the main thread so the heavy WASM pass never freezes the U
   the `OmrConfig`, waits for the provider, and exposes `process(image,
   onProgress)` plus `dispose()`.
 - `src/worker/protocol.ts` — the typed message protocol shared by both sides,
-  including `OmrConfig` (`backend`: auto/webgpu/wasm).
+  including `OmrConfig` (`backend`: auto/webgpu/wasm; `staffDetection`:
+  classical/model).
 - Inference options are UI-controlled, not URL flags: `src/components/
   InferenceSettings.tsx` is the backend picker in the header. Because the
   backend can only be set before a session is built, changing it recreates the
