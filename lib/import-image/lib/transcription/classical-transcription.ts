@@ -87,6 +87,48 @@ function binarize(image: RgbaImage): Uint8Array {
 }
 
 /**
+ * Vertical morphological closing with the given radius. Bridges vertical gaps
+ * of up to `2 * radius` pixels in each column without affecting horizontal
+ * structure. Used after staff-line removal and again after beam suppression.
+ */
+function verticalClose(
+  ink: Uint8Array,
+  width: number,
+  height: number,
+  radius: number,
+): Uint8Array {
+  const dilated = new Uint8Array(width * height);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (ink[y * width + x] === 1) {
+        const yStart = Math.max(0, y - radius);
+        const yEnd = Math.min(height - 1, y + radius);
+        for (let dy = yStart; dy <= yEnd; dy++) {
+          dilated[dy * width + x] = 1;
+        }
+      }
+    }
+  }
+  const closed = new Uint8Array(width * height);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (dilated[y * width + x] === 0) continue;
+      let allSet = true;
+      const yStart = Math.max(0, y - radius);
+      const yEnd = Math.min(height - 1, y + radius);
+      for (let dy = yStart; dy <= yEnd; dy++) {
+        if (dilated[dy * width + x] === 0) {
+          allSet = false;
+          break;
+        }
+      }
+      if (allSet) closed[y * width + x] = 1;
+    }
+  }
+  return closed;
+}
+
+/**
  * Remove staff lines from an ink mask (paint white at each known line row ±1
  * pixel), then apply a 2-pixel vertical morphological closing to bridge the
  * small gaps the erasure creates in stems and noteheads that sit on a line.
@@ -107,37 +149,7 @@ function removeStaffLinesAndClose(
       erased.fill(0, y * width, y * width + width);
     }
   }
-
-  const CLOSE_RADIUS = 2;
-  const dilated = new Uint8Array(width * height);
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      if (erased[y * width + x] === 1) {
-        const yStart = Math.max(0, y - CLOSE_RADIUS);
-        const yEnd = Math.min(height - 1, y + CLOSE_RADIUS);
-        for (let dy = yStart; dy <= yEnd; dy++) {
-          dilated[dy * width + x] = 1;
-        }
-      }
-    }
-  }
-  const closed = new Uint8Array(width * height);
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      if (dilated[y * width + x] === 0) continue;
-      let allSet = true;
-      const yStart = Math.max(0, y - CLOSE_RADIUS);
-      const yEnd = Math.min(height - 1, y + CLOSE_RADIUS);
-      for (let dy = yStart; dy <= yEnd; dy++) {
-        if (dilated[dy * width + x] === 0) {
-          allSet = false;
-          break;
-        }
-      }
-      if (allSet) closed[y * width + x] = 1;
-    }
-  }
-  return closed;
+  return verticalClose(erased, width, height, 2);
 }
 
 // ─── Connected-component labeling ─────────────────────────────────────────────
@@ -514,9 +526,11 @@ function detectClef(
   // excluded from the key-signature scan window.
   const endX = comp.x1 + Math.round(unitSize);
   const topLine = lineYs[0];
-  // Treble clef extends well above the staff (≥1.5u); bass clef stays within
-  // ~0.3u. A 0.5u threshold cleanly separates them.
-  const isTreble = comp.y0 < topLine - unitSize * 0.5;
+  // Treble clef extends above the staff; bass (and C) clefs stay within or just
+  // below the top line. Empirically the treble clef reaches ≥0.35u above the top
+  // line in rendered scores; 0.35u separates it from bass clefs (which sit at or
+  // below the top line, or at most ~0.3u above in drawn/synthetic test shapes).
+  const isTreble = comp.y0 < topLine - unitSize * 0.35;
 
   return {
     clef: isTreble ? { sign: "G", line: 2 } : { sign: "F", line: 4 },
@@ -1028,9 +1042,16 @@ function transcribeStaffClassically(image: RgbaImage, staff: Staff): Transcripti
   // Remove beams before CC labeling so they don't merge with the noteheads and
   // stems they connect. The extracted beam CCs are added back as "beam" symbols.
   const { inkWithoutBeams, beamComponents } = suppressBeams(ink, cropped.width, cropped.height, u);
-  const components = labelComponents(inkWithoutBeams, cropped.width, cropped.height);
+  // Re-close after beam suppression: thick staff lines (≥4 px) leave a residual
+  // row after ±1 erasure; the closing above bridges the 3-row gap but the
+  // residual row is full-page-width and gets suppressed as a beam. That creates
+  // a fresh 1-row gap in tall symbols (clef, stems). A second closing with the
+  // same radius re-bridges those gaps without merging symbols that are a staff
+  // space apart (the space >> 2×radius at any realistic unit size).
+  const inkClosed = verticalClose(inkWithoutBeams, cropped.width, cropped.height, 2);
+  const components = labelComponents(inkClosed, cropped.width, cropped.height);
 
-  const baseSymbols = classifyAll(components, inkWithoutBeams, cropped.width, lineYsInCrop, u);
+  const baseSymbols = classifyAll(components, inkClosed, cropped.width, lineYsInCrop, u);
   const beamSymbols: ClassifiedSymbol[] = beamComponents.map((c) => ({
     component: c,
     kind: "beam" as SymbolKind,
@@ -1044,7 +1065,7 @@ function transcribeStaffClassically(image: RgbaImage, staff: Staff): Transcripti
     symbols,
     keyEndX,
     u,
-    inkWithoutBeams,
+    inkClosed,
     cropped.width,
   );
 
@@ -1061,7 +1082,7 @@ function transcribeStaffClassically(image: RgbaImage, staff: Staff): Transcripti
   // ── Note reading ──────────────────────────────────────────────────────────
   const notes = readNotes(
     symbols,
-    inkWithoutBeams,
+    inkClosed,
     cropped.width,
     lineYsInCrop,
     u,
