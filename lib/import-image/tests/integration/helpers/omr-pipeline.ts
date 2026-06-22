@@ -40,6 +40,7 @@ import {
   segment,
   type SegmentationModels,
 } from "../../../lib/segmentation/segment";
+import { classicalStaffMask } from "../../../lib/staves/classical-staff-mask";
 import { detectBraces } from "../../../lib/staves/brace-detection";
 import { detectStaves } from "../../../lib/staves/detect-staves";
 import { groupSystems } from "../../../lib/staves/system-grouping";
@@ -49,8 +50,12 @@ import type {
   RgbaImage,
   ScoreSystem,
   Staff,
+  StaffStructure,
   Transcription,
 } from "../../../lib/types";
+
+/** Staff-detection path, mirroring the worker's OmrConfig.staffDetection. */
+export type StaffDetectionMode = "classical" | "model";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -259,12 +264,29 @@ export interface RecognitionResult {
 export async function recognizeImage(
   image: RgbaImage,
   models: OmrModels,
+  staffDetection: StaffDetectionMode = "classical",
 ): Promise<RecognitionResult> {
   const segImage = resizeToPixelBudget(image);
-  const masks = await segment(segImage, models.segmentation, {
-    batchSize: FIXED_BATCH_SIZE,
-  });
-  const staves = detectStaves(masks.staff);
+
+  // Locate stafflines. Default to the model-free classical mask (the worker's
+  // default), running the oemer segmentation model only when configured or when
+  // the classical path finds nothing — keep this in sync with omr.worker.ts.
+  const runModel = async (): Promise<StaffStructure> => {
+    const masks = await segment(segImage, models.segmentation, {
+      batchSize: FIXED_BATCH_SIZE,
+    });
+    return detectStaves(masks.staff);
+  };
+
+  let staves: StaffStructure;
+  if (staffDetection === "classical") {
+    staves = detectStaves(classicalStaffMask(segImage));
+    if (staves.staves.length === 0) {
+      staves = await runModel();
+    }
+  } else {
+    staves = await runModel();
+  }
   const braces = detectBraces(segImage, staves.staves);
 
   if (staves.staves.length === 0) {

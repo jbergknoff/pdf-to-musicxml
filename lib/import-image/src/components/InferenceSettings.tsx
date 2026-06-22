@@ -1,4 +1,8 @@
-import type { BackendChoice, OmrConfig } from "../worker/protocol";
+import type {
+  BackendChoice,
+  OmrConfig,
+  StaffDetectionMode,
+} from "../worker/protocol";
 
 /**
  * Inference controls in the header: pick the backend (or auto). Changing it
@@ -21,6 +25,15 @@ const BACKEND_LABELS: Record<BackendChoice, string> = {
 };
 
 const BACKEND_CHOICES = Object.keys(BACKEND_LABELS) as BackendChoice[];
+
+const STAFF_DETECTION_LABELS: Record<StaffDetectionMode, string> = {
+  classical: "Classical (fast, model-free)",
+  model: "Model (oemer UNet)",
+};
+
+const STAFF_DETECTION_CHOICES = Object.keys(
+  STAFF_DETECTION_LABELS,
+) as StaffDetectionMode[];
 
 export function InferenceSettings({
   config,
@@ -45,6 +58,27 @@ export function InferenceSettings({
           {BACKEND_CHOICES.map((choice) => (
             <option key={choice} value={choice}>
               {BACKEND_LABELS[choice]}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <label class="settings__field">
+        <span>Staff detection</span>
+        <select
+          disabled={disabled}
+          value={config.staffDetection}
+          onChange={(event) => {
+            onChange({
+              ...config,
+              staffDetection: event.currentTarget
+                .value as StaffDetectionMode,
+            });
+          }}
+        >
+          {STAFF_DETECTION_CHOICES.map((choice) => (
+            <option key={choice} value={choice}>
+              {STAFF_DETECTION_LABELS[choice]}
             </option>
           ))}
         </select>

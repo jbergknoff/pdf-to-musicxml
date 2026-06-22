@@ -96,9 +96,18 @@ export interface ProcessRequest {
 /** Which inference provider to use; "auto" picks WebGPU when an adapter works. */
 export type BackendChoice = "auto" | "webgpu" | "wasm";
 
+/**
+ * How to locate stafflines before transcription:
+ *  - "classical": model-free Otsu + run-length (fast, weight-free, the default
+ *    for born-digital scores), falling back to the model when it finds no staves;
+ *  - "model": always the oemer `unet_big` staff mask (robust to photos/skew).
+ */
+export type StaffDetectionMode = "classical" | "model";
+
 /** UI-controlled inference options, sent to the worker before it starts up. */
 export interface OmrConfig {
   backend: BackendChoice;
+  staffDetection: StaffDetectionMode;
 }
 
 /**
