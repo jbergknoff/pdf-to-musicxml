@@ -63,26 +63,40 @@ const BARLINE_TOKENS = new Set([
 
 /**
  * Parse a "note_X[G][.]" or "rest_X[G][.]" token.
- * Returns null for unsupported durations (tuplets, grace notes, double-dotted).
+ * Returns null for unsupported durations (tuplets, double-dotted).
+ *
+ * Grace notes (the "G" infix) are **emitted, not dropped**: a grace is still a
+ * pitched note in the score, and the source-vs-recovered diff reads every
+ * pitched note (graces included), so dropping them only costs recall. The grace
+ * flag is carried through so the builder emits a proper zero-duration
+ * `<grace/>` note — its pitch is recovered without adding any measure time.
  */
-function parseNoteRestToken(
-  token: string,
-): { isRest: boolean; duration: DurationValue; dotted: boolean } | null {
+function parseNoteRestToken(token: string): {
+  isRest: boolean;
+  duration: DurationValue;
+  dotted: boolean;
+  grace: boolean;
+} | null {
   const isRest = token.startsWith("rest_");
   const suffix = token.slice(isRest ? 5 : 5); // strip "rest_" or "note_"
 
   // Multi-measure rest (rest_2m, rest_3m, …): emit as a single whole rest.
   if (isRest && suffix.endsWith("m")) {
-    return { isRest: true, duration: "whole", dotted: false };
+    return { isRest: true, duration: "whole", dotted: false, grace: false };
   }
 
-  // Skip grace notes (contain "G") and double-dotted notes ("..").
-  if (suffix.includes("G") || suffix.endsWith("..")) {
+  // Skip double-dotted notes ("..").
+  if (suffix.endsWith("..")) {
     return null;
   }
 
-  const dotted = suffix.endsWith(".");
-  const durationStr = dotted ? suffix.slice(0, -1) : suffix;
+  // A grace note carries a "G" before any dot ("note_8G", "note_16G."); strip it
+  // and remember the flag.
+  const grace = suffix.includes("G");
+  const base = grace ? suffix.replace("G", "") : suffix;
+
+  const dotted = base.endsWith(".");
+  const durationStr = dotted ? base.slice(0, -1) : base;
   const kernNum = Number(durationStr);
   if (!Number.isInteger(kernNum)) {
     return null;
@@ -93,7 +107,7 @@ function parseNoteRestToken(
     return null; // tuplet or unsupported kern number
   }
 
-  return { isRest, duration, dotted };
+  return { isRest, duration, dotted, grace };
 }
 
 /**
@@ -102,8 +116,8 @@ function parseNoteRestToken(
  * array corresponds to the same musical symbol.
  *
  * Barline tokens in the rhythm sequence increment `measureIndex` for
- * subsequent notes. Unsupported tokens (clefs, signatures, grace notes, …)
- * are silently skipped.
+ * subsequent notes. Grace notes are emitted (with `grace: true`); unsupported
+ * tokens (clefs, signatures, tuplets, …) are silently skipped.
  */
 export function decodeTokens(
   rhythmIds: ArrayLike<number>,
@@ -226,6 +240,9 @@ export function decodeTokens(
       measureIndex,
       chord: isChord,
     };
+    if (parsed.grace) {
+      note.grace = true;
+    }
     if (firstNoteEmitted && hasChange) {
       note.attributeChange = change;
     }

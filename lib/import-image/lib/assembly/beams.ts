@@ -81,7 +81,7 @@ function assignRun(
  * Compute the beam elements for each note in a measure. Returns a map from the
  * note's index (in `notes`) to its `<beam>` elements; notes absent from the map
  * carry no beam (a lone eighth gets a flag, not a beam). Chord tail notes
- * (`chord: true`) and rests never carry beams.
+ * (`chord: true`), grace notes (`grace: true`), and rests never carry beams.
  */
 export function computeBeams(
   notes: NoteEvent[],
@@ -92,12 +92,13 @@ export function computeBeams(
   const groupSize = beamGroupSize(beats, beatType);
 
   // One entry per voice event; chord tail notes share the primary's time slot
-  // and never advance the position or carry a beam.
+  // and grace notes borrow a neighbor's time — neither advances the position or
+  // carries a (main-row) beam.
   const entries: Entry[] = [];
   let position = 0;
   for (let index = 0; index < notes.length; index++) {
     const note = notes[index];
-    if (note.chord) {
+    if (note.chord || note.grace) {
       continue;
     }
     const beams = note.pitch === "rest" ? 0 : BEAM_COUNT[note.duration];

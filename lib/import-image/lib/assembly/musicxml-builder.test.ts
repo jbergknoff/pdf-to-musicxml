@@ -125,6 +125,22 @@ describe("buildMusicXML", () => {
     expect(firstPitchAfterChord).toBeGreaterThan(firstChordPos);
   });
 
+  it("emits <grace/> and omits <duration> for a grace note", () => {
+    const xml = buildMusicXML([
+      note("B4", "eighth", 0, { grace: true }),
+      note("C4", "quarter", 0),
+    ]);
+    // The grace note carries <grace/> before its <pitch> and no <duration>.
+    const gracePos = xml.indexOf("<grace/>");
+    expect(gracePos).toBeGreaterThan(-1);
+    const graceNoteBlock = xml.slice(gracePos, xml.indexOf("</note>", gracePos));
+    expect(graceNoteBlock).toContain("<step>B</step>");
+    expect(graceNoteBlock).not.toContain("<duration>");
+    // The following regular note still has its duration.
+    expect(xml).toContain("<step>C</step>");
+    expect((xml.match(/<duration>/g) ?? []).length).toBe(1);
+  });
+
   it("does not include attributes on subsequent measures", () => {
     const xml = buildMusicXML([
       note("C4", "quarter", 0),

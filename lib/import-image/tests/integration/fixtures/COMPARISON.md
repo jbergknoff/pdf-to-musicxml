@@ -50,7 +50,7 @@ ignores them rather than asking each fixture to codify them:
 | --------------------- | ------------------------------------------------------------------------------------ |
 | `chant`               | time signature `senza-misura`→`4/4`                                                   |
 | `saltarello`          | time signature `6/8`→`3/4`                                                            |
-| `mozart-piano-sonata` | 19 missed, 11 wrong-pitch (meter `2/4` now recovered by rhythm inference)            |
+| `mozart-piano-sonata` | 16 wrong-pitch + 1 grace-acc + 2 bass misreads (meter `2/4` recovered; grace notes now emitted) |
 | `binchois` (skipped)  | 34→23 measures; 4→2 clefs; 58 missed, 20 wrong, 29 spurious, 3 acc. — *stale*, see below |
 
 Read this as: `chant` and `saltarello` recover **every pitch and attribute except
@@ -76,7 +76,19 @@ too little to infer from — so it keeps the `4/4` default.
 
 ## Findings so far
 
-Two affordance classes have already been retired by recent work:
+Three affordance classes have already been retired by recent work:
+
+- **Grace notes are now recovered, not dropped.** TrOMR tags the dense low-bass
+  arpeggios in `mozart` (e.g. m98's A2/C#3/E3) as *grace* notes (`note_32G`), and
+  the decoder used to drop every grace token — losing ~15 real pitches. A grace
+  note is still a pitched note, and the diff reads every pitched note from the
+  source (graces included), so dropping them only cost recall. `decode-tokens.ts`
+  now emits them as proper **zero-duration `<grace/>` notes** (excluded from
+  measure length, meter inference, and beam beats — see `meter.ts`/`beams.ts`/the
+  builder), so their pitch is recovered without adding measure time. That retired
+  **every** `mozart` missed-note affordance (19→0) and left the inferred meter at
+  2/4. `mozart`'s remaining gap is now 16 wrong-pitch (almost all within-chord
+  ordering, see below), 1 grace accidental, and 2 genuine low-bass misreads.
 
 - **Meter is now inferred, not guessed.** `buildScore` derives the time signature
   from the recovered rhythms (`lib/assembly/meter.ts`) instead of defaulting to
@@ -93,14 +105,21 @@ Two affordance classes have already been retired by recent work:
 
 ## The highest-value fixes next (which affordances to retire first)
 
-1. **Notehead recall on dense staves** — the dominant remaining gap. `mozart`'s
-   list is now *entirely* missed (19) and wrong-pitch (11) notes — no spurious,
-   no wrong-accidental. Accidentals, once a note is found, are essentially
-   correct, so the weakness is **finding and placing** notes (and resolving
-   chord stacks), not spelling them. The missed/wrong notes cluster in the
-   densest measures (98–102), which points at TrOMR notehead recall on tightly
-   packed staves rather than at the crop or the assembler. This is the single
-   change that would retire the most affordances across both dense fixtures.
+1. **Order-insensitive chord comparison (the `mozart` next step).** With grace
+   notes now recovered, `mozart`'s list is 16 wrong-pitch + 1 grace-acc + 2
+   genuine bass misreads — and **14 of the 16 wrong-pitch are not real errors**.
+   A chord is an *unordered set* of simultaneous pitches, but the diff aligns the
+   flat note stream sequentially, so a chord whose members TrOMR emits in a
+   different order than the source (the **same pitches**) reads as paired "wrong
+   notes": e.g. m101's `[E5,A5,C#6]` vs `[C#6,A5,E5]`, four times; m100/m102
+   likewise. Closing these needs `musicxml-diff.ts` to compare chords as sets
+   (group the `<chord/>` run and sort its members before aligning). The catch is
+   that the recovered and source chord *groupings* sometimes disagree — TrOMR
+   folds the melody note into the chord (m98, m102) — so a naive within-group
+   sort fixes m101/m100 cleanly but only partly fixes m98/m102; doing it robustly
+   means aligning by onset, not by the flat stream. After that, the genuine
+   residual is just the 2 low-bass misreads + 1 grace accidental, which *are*
+   TrOMR recall/spelling limits on tightly packed staves.
 
 2. **`binchois` system grouping (the unskip blocker).** Staff detection now
    recovers all four staves (fix above), so the remaining blockers before

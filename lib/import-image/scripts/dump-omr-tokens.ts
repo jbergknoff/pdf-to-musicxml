@@ -58,7 +58,7 @@ function fixtureNames(): string[] {
 function measureLengths(notes: NoteEvent[]): Map<number, number> {
   const lengths = new Map<number, number>();
   for (const note of notes) {
-    if (note.chord) {
+    if (note.chord || note.grace) {
       continue;
     }
     lengths.set(
