@@ -172,19 +172,28 @@ describe("decodeTokens", () => {
     expect(result[0].duration).toBe("quarter");
   });
 
-  it("skips grace notes (G suffix)", () => {
-    const graceRhythm = indexOf(RHYTHM_VOCAB, "note_4G");
+  it("emits grace notes (G suffix) with the grace flag", () => {
+    const graceRhythm = indexOf(RHYTHM_VOCAB, "note_8G");
     const quarterNote = indexOf(RHYTHM_VOCAB, "note_4");
+    const pitchB4 = indexOf(PITCH_VOCAB, "B4");
     const pitchC4 = indexOf(PITCH_VOCAB, "C4");
     const noAcc = indexOf(LIFT_VOCAB, "_");
-    const nonote = NONOTE;
 
+    // A grace note (with its own pitch) followed by a regular quarter note.
     const result = decodeTokens(
       [graceRhythm, quarterNote, EOS],
-      [nonote, pitchC4, EOS],
-      [nonote, noAcc, EOS],
+      [pitchB4, pitchC4, EOS],
+      [noAcc, noAcc, EOS],
     );
-    expect(result).toHaveLength(1);
+    expect(result).toHaveLength(2);
+    expect(result[0]).toMatchObject({
+      pitch: "B4",
+      duration: "eighth",
+      grace: true,
+    });
+    // A regular note carries no grace flag.
+    expect(result[1].pitch).toBe("C4");
+    expect(result[1].grace).toBeUndefined();
   });
 
   it("skips non-note rhythm tokens (clef, key sig, time sig)", () => {

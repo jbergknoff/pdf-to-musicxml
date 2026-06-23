@@ -149,8 +149,12 @@ Phase 3 transcription + MusicXML assembly:
   (rhythm / pitch / lift) into ordered `NoteEvent`s. The `chord` rhythm token
   is a **marker**: it sets a flag so the *following* `note_X` token is emitted
   with `chord: true` (and the same measure index). Durations cover whole through
-  32nd (dotted variants included); barline tokens increment `measureIndex`;
-  grace notes, tuplets, and unsupported tokens are skipped.
+  32nd (dotted variants included); barline tokens increment `measureIndex`.
+  Grace notes (the `G` infix, e.g. `note_32G`) are **emitted** with `grace: true`
+  — a grace is still a pitched note, so dropping it only costs recall; the builder
+  emits a zero-duration `<grace/>` note and every duration tally (measure length,
+  meter inference, beam beats) skips it. Tuplets and other unsupported tokens are
+  skipped.
 - `lib/transcription/decode-attributes.ts` — `decodeAttributes` reads the
   *leading* clef / key / time tokens that precede a staff's first note into a
   `ScoreAttributes`. Clefs parse as sign+line (`clef_F4` → `{sign:"F", line:4}`);

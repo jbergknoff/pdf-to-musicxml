@@ -80,13 +80,20 @@ function noteXml(
     staffNumber !== undefined ? `  <voice>${staffNumber}</voice>` : "";
   const staffLine =
     staffNumber !== undefined ? `  <staff>${staffNumber}</staff>` : "";
+  // A grace note carries `<grace/>` (before `<chord/>`) and, per the MusicXML
+  // schema, no `<duration>` — it borrows time from its neighbor.
+  const graceLine = note.grace ? "  <grace/>" : "";
+  const durationLine = note.grace
+    ? ""
+    : `  <duration>${dottedDivisions}</duration>`;
 
   if (note.pitch === "rest") {
     return [
       "<note>",
+      graceLine,
       note.chord ? "  <chord/>" : "",
       "  <rest/>",
-      `  <duration>${dottedDivisions}</duration>`,
+      durationLine,
       voiceLine,
       `  <type>${type}</type>`,
       note.dotted ? "  <dot/>" : "",
@@ -110,13 +117,14 @@ function noteXml(
 
   return [
     "<note>",
+    graceLine,
     note.chord ? "  <chord/>" : "",
     "  <pitch>",
     `    <step>${escapeXml(STEP_FROM_PITCH[step] ?? step)}</step>`,
     alter !== undefined ? `    <alter>${alter}</alter>` : "",
     `    <octave>${escapeXml(octave)}</octave>`,
     "  </pitch>",
-    `  <duration>${dottedDivisions}</duration>`,
+    durationLine,
     voiceLine,
     `  <type>${type}</type>`,
     note.dotted ? "  <dot/>" : "",
@@ -400,8 +408,9 @@ function grandStaffMeasureXml(
         children.push(attributeChangeXml(note.attributeChange, staffNumber));
       }
       children.push(noteXml(note, beams.get(index) ?? [], staffNumber));
-      // Chord tail notes share the previous note's time slot (no advance).
-      if (!note.chord) {
+      // Chord tail notes share the previous note's slot; grace notes borrow time
+      // from a neighbor — neither advances the measure cursor.
+      if (!note.chord && !note.grace) {
         duration += noteDivisions(note);
       }
     }

@@ -119,6 +119,13 @@ export interface NoteEvent {
   /** True when this note is simultaneous with the preceding note (MusicXML `<chord/>`). */
   chord: boolean;
   /**
+   * True for a grace note (MusicXML `<grace/>`): a pitched note with no written
+   * duration that "borrows" time from a neighbor. Emitted so its pitch is
+   * recovered, but excluded from every duration tally (measure length, meter
+   * inference, beam beats) — see the builder and `meter.ts`/`beams.ts`.
+   */
+  grace?: boolean;
+  /**
    * A clef/key/time change that takes effect immediately *before* this note (a
    * mid-staff change, e.g. a modulation at a measure start or a clef change
    * partway through). Only the changed fields are set. Absent on most notes; the

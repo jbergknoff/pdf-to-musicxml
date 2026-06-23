@@ -49,12 +49,13 @@ const MAXIMUM_BEATS = 12;
 /**
  * Total written divisions per measure for one staff's note stream, keyed by
  * `measureIndex`. Chord-tail notes (`chord: true`) share the previous onset and
- * add no time, mirroring how the builder advances its measure cursor.
+ * grace notes (`grace: true`) borrow a neighbor's time, so both add no length —
+ * mirroring how the builder advances its measure cursor.
  */
 function measureLengths(notes: NoteEvent[]): Map<number, number> {
   const lengths = new Map<number, number>();
   for (const note of notes) {
-    if (note.chord) {
+    if (note.chord || note.grace) {
       continue;
     }
     const current = lengths.get(note.measureIndex) ?? 0;

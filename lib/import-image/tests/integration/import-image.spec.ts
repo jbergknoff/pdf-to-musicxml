@@ -90,41 +90,28 @@ const EXPECTED_DIFFERENCES: Record<string, Affordance[]> = {
   chant: [codify.timeSignature("senza-misura", "4/4")],
   saltarello: [codify.timeSignature("6/8", "3/4")],
   // Recovered via the default classical (model-free) staff detection — see the
-  // staffDetection note below. (This list differs slightly from the oemer-mask
-  // recovery; the classical staff crop drops the two spurious ledger notes and a
-  // wrong accidental the model produced.)
+  // staffDetection note below.
+  //
+  // Two ratchets brought this fixture down to three genuine differences:
+  //   1. Grace notes are now EMITTED (decode-tokens.ts) rather than dropped —
+  //      TrOMR tags the dense low-bass arpeggios (e.g. m98's A2/C#3/E3) as grace
+  //      notes, and dropping them lost ~15 pitches. They are now proper
+  //      zero-duration `<grace/>` notes, so their pitch is recovered without
+  //      adding measure time (the inferred meter stays 2/4). Retired every
+  //      missed-note affordance.
+  //   2. The diff now compares simultaneous notes (chords/voices/both hands) as
+  //      an unordered set, sorted by pitch within each onset (parseScore in
+  //      musicxml-diff.ts). TrOMR emits a chord's members in a different order
+  //      than the engraver, which used to read as paired "wrong notes" (~14 of
+  //      them here, e.g. m101 [E5,A5,C#6] vs [C#6,A5,E5]); those were never real
+  //      recognition errors and are now gone.
+  // What remains is genuinely the model's limit on tightly-packed low-bass grace
+  // notes: one lift error and two pitch misreads, all in the bass arpeggios.
   "mozart-piano-sonata": [
-    // Meter (2/4) is now recovered by rhythm inference — no time affordance.
-    codify.missedNote(98, "A2"),
-    codify.wrongNote(98, "C#3", "E5"),
-    codify.missedNote(98, "C#5"),
-    codify.wrongNote(98, "E3", "C#5"),
-    codify.missedNote(98, "E5"),
-    codify.missedNote(99, "A2"),
-    codify.missedNote(99, "C#3"),
-    codify.missedNote(99, "E3"),
-    codify.wrongNote(100, "A2", "F#5"),
-    codify.missedNote(100, "A5"),
-    codify.missedNote(100, "D2"),
-    codify.wrongNote(100, "F#2", "A5"),
-    codify.missedNote(100, "F#5"),
-    codify.missedNote(101, "A2"),
-    codify.missedNote(101, "A5"),
-    codify.missedNote(101, "A5"),
-    codify.missedNote(101, "A5"),
-    codify.missedNote(101, "A5"),
-    codify.wrongNote(101, "C#3", "A5"),
-    codify.missedNote(101, "D6"),
-    codify.wrongNote(101, "D6", "A5"),
-    codify.wrongNote(101, "D6", "A5"),
-    codify.wrongNote(101, "D6", "A5"),
-    codify.wrongNote(101, "E3", "E5"),
-    codify.missedNote(101, "E5"),
-    codify.wrongNote(102, "B2", "E6"),
-    codify.missedNote(102, "E2"),
-    codify.missedNote(102, "E5"),
-    codify.missedNote(102, "E6"),
-    codify.wrongNote(102, "G#2", "E5"),
+    // Meter (2/4) is recovered by rhythm inference — no time affordance.
+    codify.wrongAccidental(98, "A2", "A#2"),
+    codify.wrongNote(100, "D2", "C#2"),
+    codify.wrongNote(100, "F#2", "E2"),
   ],
   // binchois is currently skipped (below); these are kept ready for when the
   // pipeline improves enough to unskip it. The list is long on purpose — it is

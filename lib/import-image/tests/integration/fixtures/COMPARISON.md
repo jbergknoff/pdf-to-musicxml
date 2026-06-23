@@ -50,7 +50,7 @@ ignores them rather than asking each fixture to codify them:
 | --------------------- | ------------------------------------------------------------------------------------ |
 | `chant`               | time signature `senza-misura`→`4/4`                                                   |
 | `saltarello`          | time signature `6/8`→`3/4`                                                            |
-| `mozart-piano-sonata` | 19 missed, 11 wrong-pitch (meter `2/4` now recovered by rhythm inference)            |
+| `mozart-piano-sonata` | 1 grace-acc + 2 low-bass misreads (meter `2/4` recovered; grace notes emitted; chords compared as sets) |
 | `binchois` (skipped)  | 34→23 measures; 4→2 clefs; 58 missed, 20 wrong, 29 spurious, 3 acc. — *stale*, see below |
 
 Read this as: `chant` and `saltarello` recover **every pitch and attribute except
@@ -76,7 +76,32 @@ too little to infer from — so it keeps the `4/4` default.
 
 ## Findings so far
 
-Two affordance classes have already been retired by recent work:
+Four affordance classes have already been retired by recent work:
+
+- **Grace notes are now recovered, not dropped.** TrOMR tags the dense low-bass
+  arpeggios in `mozart` (e.g. m98's A2/C#3/E3) as *grace* notes (`note_32G`), and
+  the decoder used to drop every grace token — losing ~15 real pitches. A grace
+  note is still a pitched note, and the diff reads every pitched note from the
+  source (graces included), so dropping them only cost recall. `decode-tokens.ts`
+  now emits them as proper **zero-duration `<grace/>` notes** (excluded from
+  measure length, meter inference, and beam beats — see `meter.ts`/`beams.ts`/the
+  builder), so their pitch is recovered without adding measure time. That retired
+  **every** `mozart` missed-note affordance (19→0) and left the inferred meter at
+  2/4.
+
+- **Chords/voices are compared as unordered sets.** A chord — or any notes
+  sounding at one instant (multiple voices in a staff, both hands of a grand
+  staff) — is an unordered pitch set, but the diff used to align the flat
+  document-order stream sequentially, so a chord whose members TrOMR emitted in a
+  different order than the engraver read as paired "wrong notes". `parseScore`
+  (`musicxml-diff.ts`) now tags each note with its **onset** (simulating the
+  MusicXML time cursor: non-chord notes advance it, `<chord/>`/grace notes do
+  not, `<backup>`/`<forward>` move it) and sorts each measure by `(onset, pitch)`,
+  so simultaneous notes compare as a set while the melodic sequence of distinct
+  onsets is preserved (monophonic music is untouched — one note per onset). That
+  removed ~14 of `mozart`'s "wrong notes" (e.g. m101 `[E5,A5,C#6]` vs
+  `[C#6,A5,E5]`), leaving only **3 genuine** differences: a lift error on the m98
+  bass grace (A2→A#2) and two low-bass grace misreads (m100 D2→C#2, F#2→E2).
 
 - **Meter is now inferred, not guessed.** `buildScore` derives the time signature
   from the recovered rhythms (`lib/assembly/meter.ts`) instead of defaulting to
@@ -93,14 +118,12 @@ Two affordance classes have already been retired by recent work:
 
 ## The highest-value fixes next (which affordances to retire first)
 
-1. **Notehead recall on dense staves** — the dominant remaining gap. `mozart`'s
-   list is now *entirely* missed (19) and wrong-pitch (11) notes — no spurious,
-   no wrong-accidental. Accidentals, once a note is found, are essentially
-   correct, so the weakness is **finding and placing** notes (and resolving
-   chord stacks), not spelling them. The missed/wrong notes cluster in the
-   densest measures (98–102), which points at TrOMR notehead recall on tightly
-   packed staves rather than at the crop or the assembler. This is the single
-   change that would retire the most affordances across both dense fixtures.
+1. **Low-bass grace recall/spelling on `mozart` (the genuine residual).** All
+   that is left on `mozart` are 3 real model errors, every one in the tightly
+   packed low-bass grace arpeggios: a lift error (m98 A2→A#2) and two pitch
+   misreads (m100 D2→C#2, F#2→E2). These are TrOMR notehead/accidental limits at
+   the bottom of the bass staff, not assembler or diff issues — closing them needs
+   a stronger transcription pass (or a higher-resolution crop) on that region.
 
 2. **`binchois` system grouping (the unskip blocker).** Staff detection now
    recovers all four staves (fix above), so the remaining blockers before
