@@ -50,7 +50,7 @@ ignores them rather than asking each fixture to codify them:
 | --------------------- | ------------------------------------------------------------------------------------ |
 | `chant`               | time signature `senza-misura`→`4/4`                                                   |
 | `saltarello`          | time signature `6/8`→`3/4`                                                            |
-| `mozart-piano-sonata` | 16 wrong-pitch + 1 grace-acc + 2 bass misreads (meter `2/4` recovered; grace notes now emitted) |
+| `mozart-piano-sonata` | 1 grace-acc + 2 low-bass misreads (meter `2/4` recovered; grace notes emitted; chords compared as sets) |
 | `binchois` (skipped)  | 34→23 measures; 4→2 clefs; 58 missed, 20 wrong, 29 spurious, 3 acc. — *stale*, see below |
 
 Read this as: `chant` and `saltarello` recover **every pitch and attribute except
@@ -76,7 +76,7 @@ too little to infer from — so it keeps the `4/4` default.
 
 ## Findings so far
 
-Three affordance classes have already been retired by recent work:
+Four affordance classes have already been retired by recent work:
 
 - **Grace notes are now recovered, not dropped.** TrOMR tags the dense low-bass
   arpeggios in `mozart` (e.g. m98's A2/C#3/E3) as *grace* notes (`note_32G`), and
@@ -87,8 +87,21 @@ Three affordance classes have already been retired by recent work:
   measure length, meter inference, and beam beats — see `meter.ts`/`beams.ts`/the
   builder), so their pitch is recovered without adding measure time. That retired
   **every** `mozart` missed-note affordance (19→0) and left the inferred meter at
-  2/4. `mozart`'s remaining gap is now 16 wrong-pitch (almost all within-chord
-  ordering, see below), 1 grace accidental, and 2 genuine low-bass misreads.
+  2/4.
+
+- **Chords/voices are compared as unordered sets.** A chord — or any notes
+  sounding at one instant (multiple voices in a staff, both hands of a grand
+  staff) — is an unordered pitch set, but the diff used to align the flat
+  document-order stream sequentially, so a chord whose members TrOMR emitted in a
+  different order than the engraver read as paired "wrong notes". `parseScore`
+  (`musicxml-diff.ts`) now tags each note with its **onset** (simulating the
+  MusicXML time cursor: non-chord notes advance it, `<chord/>`/grace notes do
+  not, `<backup>`/`<forward>` move it) and sorts each measure by `(onset, pitch)`,
+  so simultaneous notes compare as a set while the melodic sequence of distinct
+  onsets is preserved (monophonic music is untouched — one note per onset). That
+  removed ~14 of `mozart`'s "wrong notes" (e.g. m101 `[E5,A5,C#6]` vs
+  `[C#6,A5,E5]`), leaving only **3 genuine** differences: a lift error on the m98
+  bass grace (A2→A#2) and two low-bass grace misreads (m100 D2→C#2, F#2→E2).
 
 - **Meter is now inferred, not guessed.** `buildScore` derives the time signature
   from the recovered rhythms (`lib/assembly/meter.ts`) instead of defaulting to
@@ -105,21 +118,12 @@ Three affordance classes have already been retired by recent work:
 
 ## The highest-value fixes next (which affordances to retire first)
 
-1. **Order-insensitive chord comparison (the `mozart` next step).** With grace
-   notes now recovered, `mozart`'s list is 16 wrong-pitch + 1 grace-acc + 2
-   genuine bass misreads — and **14 of the 16 wrong-pitch are not real errors**.
-   A chord is an *unordered set* of simultaneous pitches, but the diff aligns the
-   flat note stream sequentially, so a chord whose members TrOMR emits in a
-   different order than the source (the **same pitches**) reads as paired "wrong
-   notes": e.g. m101's `[E5,A5,C#6]` vs `[C#6,A5,E5]`, four times; m100/m102
-   likewise. Closing these needs `musicxml-diff.ts` to compare chords as sets
-   (group the `<chord/>` run and sort its members before aligning). The catch is
-   that the recovered and source chord *groupings* sometimes disagree — TrOMR
-   folds the melody note into the chord (m98, m102) — so a naive within-group
-   sort fixes m101/m100 cleanly but only partly fixes m98/m102; doing it robustly
-   means aligning by onset, not by the flat stream. After that, the genuine
-   residual is just the 2 low-bass misreads + 1 grace accidental, which *are*
-   TrOMR recall/spelling limits on tightly packed staves.
+1. **Low-bass grace recall/spelling on `mozart` (the genuine residual).** All
+   that is left on `mozart` are 3 real model errors, every one in the tightly
+   packed low-bass grace arpeggios: a lift error (m98 A2→A#2) and two pitch
+   misreads (m100 D2→C#2, F#2→E2). These are TrOMR notehead/accidental limits at
+   the bottom of the bass staff, not assembler or diff issues — closing them needs
+   a stronger transcription pass (or a higher-resolution crop) on that region.
 
 2. **`binchois` system grouping (the unskip blocker).** Staff detection now
    recovers all four staves (fix above), so the remaining blockers before

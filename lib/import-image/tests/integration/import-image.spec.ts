@@ -92,40 +92,26 @@ const EXPECTED_DIFFERENCES: Record<string, Affordance[]> = {
   // Recovered via the default classical (model-free) staff detection — see the
   // staffDetection note below.
   //
-  // Grace notes are now EMITTED (decode-tokens.ts) rather than dropped: TrOMR
-  // tags the dense low-bass arpeggios (e.g. m98's A2/C#3/E3) as grace notes, and
-  // dropping them lost ~15 pitches per the old list. Emitting them as proper
-  // zero-duration `<grace/>` notes recovers those pitches without adding measure
-  // time (so the inferred meter stays 2/4). That retired every missed-note
-  // affordance. What remains:
-  //   • two genuine low-bass misreads (m100 D2→C#2, F#2→E2);
-  //   • one grace-accidental error (m98 A2→A#2); and
-  //   • the rest are within-CHORD member ORDERING: a chord is an unordered set of
-  //     simultaneous pitches, but the diff aligns the flat note stream
-  //     sequentially, so a chord whose members TrOMR emits in a different order
-  //     than the source (same pitches!) reads as paired "wrong notes" (e.g. m101
-  //     [E5,A5,C#6] vs [C#6,A5,E5], four times). These are not real recognition
-  //     errors — closing them needs an order-insensitive chord comparison in the
-  //     diff (musicxml-diff.ts), the next ratchet here (see COMPARISON.md).
+  // Two ratchets brought this fixture down to three genuine differences:
+  //   1. Grace notes are now EMITTED (decode-tokens.ts) rather than dropped —
+  //      TrOMR tags the dense low-bass arpeggios (e.g. m98's A2/C#3/E3) as grace
+  //      notes, and dropping them lost ~15 pitches. They are now proper
+  //      zero-duration `<grace/>` notes, so their pitch is recovered without
+  //      adding measure time (the inferred meter stays 2/4). Retired every
+  //      missed-note affordance.
+  //   2. The diff now compares simultaneous notes (chords/voices/both hands) as
+  //      an unordered set, sorted by pitch within each onset (parseScore in
+  //      musicxml-diff.ts). TrOMR emits a chord's members in a different order
+  //      than the engraver, which used to read as paired "wrong notes" (~14 of
+  //      them here, e.g. m101 [E5,A5,C#6] vs [C#6,A5,E5]); those were never real
+  //      recognition errors and are now gone.
+  // What remains is genuinely the model's limit on tightly-packed low-bass grace
+  // notes: one lift error and two pitch misreads, all in the bass arpeggios.
   "mozart-piano-sonata": [
     // Meter (2/4) is recovered by rhythm inference — no time affordance.
     codify.wrongAccidental(98, "A2", "A#2"),
-    codify.wrongNote(98, "A5", "C#5"),
-    codify.wrongNote(98, "C#5", "A5"),
     codify.wrongNote(100, "D2", "C#2"),
-    codify.wrongNote(100, "D6", "F#5"),
     codify.wrongNote(100, "F#2", "E2"),
-    codify.wrongNote(100, "F#5", "D6"),
-    codify.wrongNote(101, "C#6", "E5"),
-    codify.wrongNote(101, "C#6", "E5"),
-    codify.wrongNote(101, "C#6", "E5"),
-    codify.wrongNote(101, "C#6", "E5"),
-    codify.wrongNote(101, "E5", "C#6"),
-    codify.wrongNote(101, "E5", "C#6"),
-    codify.wrongNote(101, "E5", "C#6"),
-    codify.wrongNote(101, "E5", "C#6"),
-    codify.wrongNote(102, "E6", "G#5"),
-    codify.wrongNote(102, "G#5", "E6"),
   ],
   // binchois is currently skipped (below); these are kept ready for when the
   // pipeline improves enough to unskip it. The list is long on purpose — it is

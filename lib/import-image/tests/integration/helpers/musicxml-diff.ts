@@ -71,7 +71,7 @@ export function formatPitch(note: Note): string {
 }
 
 export interface Score {
-  /** Pitched notes in document order (rests carry no pitch, so they're skipped). */
+  /** Pitched notes, canonicalized per measure (see {@link parseScore}). */
   notes: Note[];
   measureCount: number;
   /** Key signature as a fifths count (0 = C major / A minor). */
@@ -82,6 +82,41 @@ export interface Score {
   clefs: string[];
 }
 
+// Semitone offset of each diatonic step within an octave, for ordering
+// simultaneous notes by pitch (a chord/voice stack is unordered, so we need a
+// stable canonical order — see parseScore).
+const STEP_SEMITONE: Readonly<Record<string, number>> = {
+  C: 0,
+  D: 2,
+  E: 4,
+  F: 5,
+  G: 7,
+  A: 9,
+  B: 11,
+};
+
+function pitchChroma(step: string, alter: number, octave: number): number {
+  return octave * 12 + (STEP_SEMITONE[step] ?? 0) + alter;
+}
+
+/**
+ * Read a score into the comparable form: its pitched notes (canonicalized, see
+ * below), measure count, key, time, and clefs.
+ *
+ * **Per-measure canonicalization.** A chord — and, more generally, any set of
+ * notes sounding at the same instant (multiple voices in a staff, both hands of
+ * a grand staff) — is an *unordered* set of pitches; the order they happen to
+ * appear in the document is not musically meaningful, and TrOMR emits a chord's
+ * members in a different order than the engraver wrote them. Comparing the raw
+ * document order therefore reports spurious "wrong notes" whenever two scores
+ * stack the same pitches differently. To avoid that we group each measure's
+ * notes by **onset** and sort each onset group by pitch, so simultaneous notes
+ * compare as a set while the *sequence* of distinct onsets (the melody) is
+ * preserved exactly. Onset is the MusicXML time cursor: a non-chord note
+ * advances it by its duration, a `<chord/>` member and a grace note do not, and
+ * `<backup>`/`<forward>` move it (this is how a score interleaves voices/hands).
+ * Monophonic music has one note per onset, so its order is untouched.
+ */
 export function parseScore(xml: string): Score {
   const document = new DOMParser().parseFromString(xml, "text/xml");
 
@@ -95,23 +130,60 @@ export function parseScore(xml: string): Score {
       measureEl.getAttribute("number") ?? `${index + 1}`,
       10,
     );
-    for (const noteEl of Array.from(measureEl.querySelectorAll("note"))) {
-      const pitchEl = noteEl.querySelector("pitch");
-      if (!pitchEl) {
+
+    // Simulate the time cursor through the measure's children, tagging each
+    // pitched note with its onset, then sort by (onset, pitch) — see the doc note.
+    const measureNotes: { note: Note; onset: number; chroma: number }[] = [];
+    let cursor = 0;
+    let lastOnset = 0;
+    for (const child of Array.from(measureEl.children)) {
+      const tag = child.tagName?.toLowerCase();
+      const durationOf = () =>
+        Number.parseInt(child.querySelector("duration")?.textContent ?? "0", 10);
+      if (tag === "backup") {
+        cursor -= durationOf();
         continue;
       }
-      notes.push({
-        step: pitchEl.querySelector("step")?.textContent ?? "?",
-        alter: Number.parseInt(
+      if (tag === "forward") {
+        cursor += durationOf();
+        continue;
+      }
+      if (tag !== "note") {
+        continue;
+      }
+      const isChord = child.querySelector("chord") !== null;
+      const isGrace = child.querySelector("grace") !== null;
+      const onset = isChord ? lastOnset : cursor;
+      if (!isChord) {
+        lastOnset = cursor;
+      }
+      const pitchEl = child.querySelector("pitch");
+      if (pitchEl) {
+        const step = pitchEl.querySelector("step")?.textContent ?? "?";
+        const alter = Number.parseInt(
           pitchEl.querySelector("alter")?.textContent ?? "0",
           10,
-        ),
-        octave: Number.parseInt(
+        );
+        const octave = Number.parseInt(
           pitchEl.querySelector("octave")?.textContent ?? "0",
           10,
-        ),
-        measure,
-      });
+        );
+        measureNotes.push({
+          note: { step, alter, octave, measure },
+          onset,
+          chroma: pitchChroma(step, alter, octave),
+        });
+      }
+      // A chord member shares the previous onset and a grace note borrows time;
+      // neither advances the cursor.
+      if (!isChord && !isGrace) {
+        cursor += durationOf();
+      }
+    }
+
+    measureNotes.sort((a, b) => a.onset - b.onset || a.chroma - b.chroma);
+    for (const measureNote of measureNotes) {
+      notes.push(measureNote.note);
     }
   }
 
