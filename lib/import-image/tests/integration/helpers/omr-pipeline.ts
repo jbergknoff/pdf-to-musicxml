@@ -41,6 +41,7 @@ import {
   type SegmentationModels,
 } from "../../../lib/segmentation/segment";
 import { classicalStaffMask } from "../../../lib/staves/classical-staff-mask";
+import { fetchModelFromSource } from "../../../scripts/model-source";
 import { detectBraces } from "../../../lib/staves/brace-detection";
 import { detectStaves } from "../../../lib/staves/detect-staves";
 import { groupSystems } from "../../../lib/staves/system-grouping";
@@ -139,14 +140,30 @@ async function fetchModelToDisk(
   entry: ModelManifestEntry,
   target: string,
 ): Promise<void> {
+  // Primary source: the served v2 weights (same bytes the app ships). This is
+  // what local and CI runs use, so their behavior is unchanged.
   const url = `${MODELS_BASE_URL}${modelUrl(entry)}`;
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(
-      `Failed to fetch model "${entry.fileName}" from ${url}: ${response.status}`,
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`${response.status} from ${url}`);
+    }
+    writeFileSync(target, Buffer.from(await response.arrayBuffer()));
+    return;
+  } catch (servedError) {
+    // Fallback: fetch from the original upstream release (the same source
+    // `make models` uses). Equivalent for these tests — TrOMR weights are served
+    // as-is, and the classical staff path never runs the segmentation weights —
+    // so an environment that cannot reach the served host (e.g. a restricted
+    // network) can still run the suite. See scripts/model-source.ts.
+    console.warn(
+      `[omr-models] served weights host unreachable for ${entry.fileName} ` +
+        `(${String(servedError)}); falling back to the upstream release ` +
+        `${entry.sourceUrl}`,
     );
+    const bytes = await fetchModelFromSource(entry);
+    writeFileSync(target, bytes);
   }
-  writeFileSync(target, Buffer.from(await response.arrayBuffer()));
 }
 
 /**

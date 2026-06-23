@@ -81,6 +81,21 @@ committed screenshot baselines live under `tests/integration/fixtures/` and
 `tests/integration/__snapshots__/` (screenshots only). CI runs them in the
 `omr-integration` job (separate from the editor job; caches the weights).
 
+**Running the OMR integration tests (weights).** The suite needs the ~109 MB
+weights in `lib/import-image/public/models/`. `ensureModels` fetches them on first
+run from the served (Netlify) host the app uses, falling back to the upstream
+GitHub releases (`scripts/model-source.ts`) if that host is unreachable. The
+fixtures use the model-free *classical* staff path and the TrOMR weights are
+served as-is, so the upstream weights recover byte-identical MusicXML — either
+source works. **On a network-restricted machine (e.g. Claude Code on the web,
+whose egress proxy CA is mounted only into the `main` Docker service, not
+`playwright`): run `make models` first.** That downloads from the upstream
+releases inside the `main` container (which has the proxy CA) into the shared
+`public/models/` volume; `make omr-integration-test` (the `playwright` container)
+then finds them and skips the network fetch. The screenshots render in the pinned
+Playwright image, so baselines regenerated locally (`ARGS=--update-snapshots`)
+match CI.
+
 Out-of-band OMR model-weight targets (weights are ~109 MB, gitignored, not
 committed) run inside `lib/import-image/` so their relative paths resolve:
 `make models` (download), `make optimize-models` (onnxsim to v2),

@@ -309,6 +309,18 @@ The only local requirements are `make` and `docker`. Bun, Biome, tsc, and
 Playwright run inside containers via `docker compose`; nothing is installed on
 the host. (On Netlify, `NETLIFY=true` makes the Makefile run the tools directly.)
 
+`make models` downloads from the original upstream releases via
+`scripts/model-source.ts` (oemer GitHub `checkpoints` + homr `onnx_checkpoints`
+ZIPs). That same module is the OMR integration tests' offline fallback: their
+`ensureModels` helper fetches the served (Netlify) weights first and falls back to
+the upstream releases when that host is unreachable. The fixtures use the
+model-free classical staff path (segmentation weights never run) and the TrOMR
+weights are served as-is, so the upstream and served weights recover identical
+MusicXML. On a network-restricted machine where the test container can't reach
+either host (e.g. a proxy CA mounted only into the `main` Docker service), run
+`make models` first to populate `public/models/` from the `main` container, then
+`make omr-integration-test`.
+
 ```sh
 make models           # download oemer ONNX weights -> public/models/ (local, once)
 make optimize-models  # onnxsim the weights to served v2 form (after models, out of band)
