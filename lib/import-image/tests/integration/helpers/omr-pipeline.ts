@@ -253,6 +253,10 @@ export interface RecognitionResult {
   staffCount: number;
   /** Total note events across all staves. */
   noteCount: number;
+  /** Per-staff transcriptions (notes, raw rhythm tokens, decoded attributes) —
+   * empty when nothing was recognized. Exposed for the token-dump harness
+   * (scripts/dump-omr-tokens.ts); the spec asserts on the other fields. */
+  transcriptions: Transcription[];
 }
 
 /**
@@ -290,7 +294,7 @@ export async function recognizeImage(
   const braces = detectBraces(segImage, staves.staves);
 
   if (staves.staves.length === 0) {
-    return { musicXml: "", staffCount: 0, noteCount: 0 };
+    return { musicXml: "", staffCount: 0, noteCount: 0, transcriptions: [] };
   }
 
   const scaleX = image.width / segImage.width;
@@ -311,5 +315,10 @@ export async function recognizeImage(
 
   const systems: ScoreSystem[] = groupSystems(transcriptions, braces);
   const musicXml = noteCount === 0 ? "" : buildScore(systems);
-  return { musicXml, staffCount: staves.staves.length, noteCount };
+  return {
+    musicXml,
+    staffCount: staves.staves.length,
+    noteCount,
+    transcriptions,
+  };
 }

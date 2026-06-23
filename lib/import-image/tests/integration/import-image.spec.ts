@@ -76,15 +76,25 @@ function fixtureNames(): string[] {
 // here — see NEVER_COMPARED_FEATURES in helpers/musicxml-diff.ts. What remains is
 // only the genuine recognition gap. `chant` and `saltarello` recover every pitch
 // and attribute except the meter; the dense scores also drop/mis-place notes.
+//
+// Meter note: TrOMR emits no time-signature token for these staves, so the
+// builder now *infers* the meter from the recovered rhythms (lib/assembly/meter.ts)
+// instead of defaulting to 4/4. That inference resolves a measure to its simple
+// (quarter-beat) meter, so `mozart` (2/4) becomes exact and `saltarello` (6/8) is
+// inferred as 3/4 — the right measure length, but simple/compound is not
+// recoverable from durations alone, so its affordance shrinks rather than
+// vanishing. `chant` is a single unmetered measure, too little to infer from, so
+// it keeps the 4/4 default. (Predictions made without a local weights run; the
+// omr-integration CI job confirms the exact recovered meters.)
 const EXPECTED_DIFFERENCES: Record<string, Affordance[]> = {
   chant: [codify.timeSignature("senza-misura", "4/4")],
-  saltarello: [codify.timeSignature("6/8", "4/4")],
+  saltarello: [codify.timeSignature("6/8", "3/4")],
   // Recovered via the default classical (model-free) staff detection — see the
   // staffDetection note below. (This list differs slightly from the oemer-mask
   // recovery; the classical staff crop drops the two spurious ledger notes and a
   // wrong accidental the model produced.)
   "mozart-piano-sonata": [
-    codify.timeSignature("2/4", "4/4"),
+    // Meter (2/4) is now recovered by rhythm inference — no time affordance.
     codify.missedNote(98, "A2"),
     codify.wrongNote(98, "C#3", "E5"),
     codify.missedNote(98, "C#5"),
@@ -120,7 +130,9 @@ const EXPECTED_DIFFERENCES: Record<string, Affordance[]> = {
   // pipeline improves enough to unskip it. The list is long on purpose — it is
   // exactly how far the recovery is from the real score today.
   binchois: [
-    codify.timeSignature("3/4", "4/4"),
+    // Meter (3/4) is now expected from rhythm inference — no time affordance.
+    // (Binchois is skipped below, so this is a prediction the omr-integration job
+    // would confirm once the fixture is good enough to unskip.)
     codify.clefCount(4, 2),
     codify.measureCount(34, 23),
     codify.missedNote(1, "C4"),

@@ -189,6 +189,19 @@ Phase 3 transcription + MusicXML assembly:
   — the editor surfaces the message and the `[omr]` TrOMR token logs show what was
   decoded. The worker and the public `importFile` both build via `groupSystems` →
   `buildScore` (the importer concatenating systems across pages first).
+  **Meter inference:** when no staff recovered a time signature (TrOMR often
+  emits none), `buildScore` infers one from the recovered rhythms via
+  `lib/assembly/meter.ts` (`inferMeterFromStaves`) instead of letting the builder
+  fall back to a blind 4/4 — the modal per-measure total duration is the measure
+  length, mapped to a *simple* (quarter-beat) meter. It needs ≥2 measures to agree
+  (a single unmetered measure keeps 4/4) and cannot recover simple-vs-compound
+  (6/8 reads as 3/4, since beaming is not in TrOMR's tokens). The inference is
+  confined to `buildScore`; low-level `buildMusicXML` keeps its plain 4/4 default
+  for direct/test use.
+- `lib/assembly/meter.ts` — `inferMeterFromStaves(staffNotes)` derives a meter
+  from recovered note durations (the modal per-measure total), used by
+  `buildScore` as the time-signature fallback (see above). Pure and unit-tested
+  (`meter.test.ts`).
 - `lib/assembly/durations.ts` — shared duration arithmetic (divisions per
   quarter, each type's divisions, dotted length, and `BEAM_COUNT` per type) used
   by both the builder and the beam grouper (one source of truth, no import cycle).

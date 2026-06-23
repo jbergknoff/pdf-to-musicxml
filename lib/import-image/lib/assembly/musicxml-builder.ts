@@ -12,6 +12,7 @@ import type { NoteEvent, ScoreAttributes, ScoreSystem } from "../types";
 import { type BeamElement, computeBeams } from "./beams";
 import { combinePages } from "./combine-pages";
 import { DIVISIONS, DURATION_DIVISIONS, noteDivisions } from "./durations";
+import { inferMeterFromStaves } from "./meter";
 
 const MUSICXML_TYPE: Record<NoteEvent["duration"], string> = {
   whole: "whole",
@@ -307,14 +308,19 @@ function measureLength(beats: number, beatType: number): number {
   return (beats * DIVISIONS * 4) / beatType;
 }
 
-/** Opening `<attributes>` for a multi-staff part: shared key/time, a clef per staff. */
+/**
+ * Opening `<attributes>` for a multi-staff part: shared key/time, a clef per
+ * staff. The meter is passed in resolved (recovered, else inferred from the
+ * rhythms, else the default) so the printed `<time>` matches the one driving
+ * beams and measure rests.
+ */
 function grandStaffAttributesXml(
   staffAttributes: (ScoreAttributes | undefined)[],
+  beats: number,
+  beatType: number,
 ): string {
   const top = staffAttributes[0] ?? {};
   const fifths = top.keyFifths ?? DEFAULT_FIFTHS;
-  const beats = top.time?.beats ?? DEFAULT_BEATS;
-  const beatType = top.time?.beatType ?? DEFAULT_BEAT_TYPE;
   const lines = [
     "<attributes>",
     `  <divisions>${DIVISIONS}</divisions>`,
@@ -436,13 +442,19 @@ export function buildScore(
     }
     // Concatenate single-staff systems sequentially (each numbers measures from
     // 0) and reuse the single-staff builder unchanged.
-    const notes = combinePages(
-      systems.map((system) => system.staves[0]?.notes ?? []),
-    );
-    return buildMusicXML(notes, {
-      attributes: firstStaff?.attributes,
-      partName,
-    });
+    const staffStreams = systems.map((system) => system.staves[0]?.notes ?? []);
+    const notes = combinePages(staffStreams);
+    // When TrOMR recovered no time signature, infer it from the rhythms rather
+    // than letting buildMusicXML fall back to a blind 4/4 (per-system streams so
+    // each system's own measures are tallied, not the concatenated indices).
+    let attributes = firstStaff?.attributes;
+    if (attributes !== undefined && attributes.time === undefined) {
+      const inferred = inferMeterFromStaves(staffStreams);
+      if (inferred !== undefined) {
+        attributes = { ...attributes, time: inferred };
+      }
+    }
+    return buildMusicXML(notes, { attributes, partName });
   }
 
   // Place every system's staves onto a shared measure grid. Each system numbers
@@ -476,10 +488,28 @@ export function buildScore(
   }
   ensureMeasure(0); // always at least one measure
 
+  // Resolve the shared meter once: the top staff's recovered time signature, or
+  // (when TrOMR emitted none) one inferred from every staff's rhythms, falling
+  // back to the default only when even that is inconclusive. This drives the
+  // printed `<time>`, the beam beats, and the whole-measure rest lengths alike.
+  let resolvedTime = staffAttributes[0]?.time;
+  if (resolvedTime === undefined) {
+    const everyStaffStream: NoteEvent[][] = [];
+    for (const system of systems) {
+      for (const staff of system.staves) {
+        everyStaffStream.push(staff.notes);
+      }
+    }
+    resolvedTime = inferMeterFromStaves(everyStaffStream);
+  }
   // Track the meter at each measure's start (top staff), for beams and rests.
-  let beats = staffAttributes[0]?.time?.beats ?? DEFAULT_BEATS;
-  let beatType = staffAttributes[0]?.time?.beatType ?? DEFAULT_BEAT_TYPE;
-  const openingAttributes = grandStaffAttributesXml(staffAttributes);
+  let beats = resolvedTime?.beats ?? DEFAULT_BEATS;
+  let beatType = resolvedTime?.beatType ?? DEFAULT_BEAT_TYPE;
+  const openingAttributes = grandStaffAttributesXml(
+    staffAttributes,
+    beats,
+    beatType,
+  );
   const measures = measureStaffNotes.map((staffNotes, index) => {
     const xml = grandStaffMeasureXml(
       staffNotes,

@@ -471,8 +471,10 @@ export const codify = {
     return {
       id: `time-signature ${source}→${recovered}`,
       reason:
-        "TrOMR does not emit a time signature for these staves, so the builder " +
-        "falls back to 4/4. Resolving it means recovering the meter.",
+        "TrOMR emits no time-signature token for these staves; the builder " +
+        "infers the meter from the recovered rhythms (lib/assembly/meter.ts), " +
+        "which recovers the measure length but not simple-vs-compound (6/8 reads " +
+        "as 3/4) and needs >1 measure (an unmetered single measure keeps 4/4).",
       expected: { kind: "time-signature", source, recovered },
     };
   },

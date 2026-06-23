@@ -49,24 +49,31 @@ ignores them rather than asking each fixture to codify them:
 | fixture               | codified affordances                                                                 |
 | --------------------- | ------------------------------------------------------------------------------------ |
 | `chant`               | time signature `senza-misura`→`4/4`                                                   |
-| `saltarello`          | time signature `6/8`→`4/4`                                                            |
-| `mozart-piano-sonata` | time `2/4`→`4/4`; 19 missed, 11 wrong-pitch, 2 spurious, 1 wrong-accidental           |
-| `binchois` (skipped)  | time `3/4`→`4/4`; 34→23 measures; 4→2 clefs; 58 missed, 20 wrong, 29 spurious, 3 acc. |
+| `saltarello`          | time signature `6/8`→`3/4`                                                            |
+| `mozart-piano-sonata` | 19 missed, 11 wrong-pitch, 2 spurious, 1 wrong-accidental                             |
+| `binchois` (skipped)  | 34→23 measures; 4→2 clefs; 58 missed, 20 wrong, 29 spurious, 3 acc.                   |
 
 Read this as: `chant` and `saltarello` recover **every pitch and attribute except
-the meter**; the only thing standing between them and a strict source-equality
-assertion is time-signature recovery. The dense scores additionally drop and
-mis-place notes.
+the meter**. The dense scores additionally drop and mis-place notes.
+
+## Meter inference
+
+TrOMR emits no time-signature token for any of these fixtures, so the builder
+**infers the meter from the recovered rhythms** (`lib/assembly/meter.ts`): the
+most common per-measure total duration is the measure length, mapped to a simple
+(quarter-beat) meter. This made `mozart` (2/4) exact — its time affordance is
+retired — and gives `saltarello` the right measure length. It does **not**
+recover simple-vs-compound (a 6/8 measure has the same length as 3/4, and beaming
+is not in TrOMR's tokens), so `saltarello` is inferred as `3/4`; closing that last
+gap needs a beaming/beat-grouping signal. `chant` is a single unmetered measure —
+too little to infer from — so it keeps the `4/4` default.
 
 ## The highest-value fixes (which affordances to retire first)
 
-1. **Time signature.** Codified on *all four* fixtures — TrOMR emits no time
-   signature, so the builder defaults to `4/4`. Recovering the meter would retire
-   four affordances at once and let `chant`/`saltarello` assert exact equality.
-2. **Notehead recall on dense staves** (`mozart`, `binchois` missed-notes).
+1. **Notehead recall on dense staves** (`mozart`, `binchois` missed-notes).
    Accidentals, once a note is found, are essentially correct (the
    wrong-accidental counts are tiny), so the weakness is *finding and placing*
    notes, not spelling them.
-3. **Staff/system detection** (`binchois` clef-count and measure-count): only two
+2. **Staff/system detection** (`binchois` clef-count and measure-count): only two
    of its four bass-clef staves survive, which is also why it over-fills a measure
    and can't be engraved — hence it is in `SKIPPED_FIXTURES`.
