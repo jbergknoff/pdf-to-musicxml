@@ -142,8 +142,23 @@ Four affordance classes have already been retired by recent work:
    that is left on `mozart` are 3 real model errors, every one in the tightly
    packed low-bass grace arpeggios: a lift error (m98 A2→A#2) and two pitch
    misreads (m100 D2→C#2, F#2→E2). These are TrOMR notehead/accidental limits at
-   the bottom of the bass staff, not assembler or diff issues — closing them needs
-   a stronger transcription pass (or a higher-resolution crop) on that region.
+   the bottom of the bass staff, not assembler or diff issues.
+
+   **The "higher-resolution crop" idea was tested and ruled out.** mozart's bass
+   staff is one wide grand-staff strip (~4500 px), so the TrOMR canvas scales it
+   to fit width 1280 — squeezing the staff to ~48 px tall in the 256-tall canvas
+   (interline ~12 px) and leaving most of the vertical resolution unused. The
+   obvious fix is to split a wide staff into narrower horizontal slices so each
+   slice fills more of the canvas. Transcribing the bass staff in half-width
+   slices (interline ~22 px, ~2× the vertical resolution) does **not** fix the
+   misreads: the m100 arpeggio still decodes `C#2 E2 A2`, byte-identical to the
+   full-width read, and the m98 arpeggio gets *worse* (`G#2 B2 E3`). Splitting
+   also re-centers each slice, which shifts the absolute vertical reference the
+   model reads pitch from and throws the read off by an octave on other slices.
+   So the remaining errors are the model reading these specific densely-packed
+   low ledger noteheads/accidentals wrong, independent of resolution — closing
+   them needs a stronger transcription model (or a model fine-tuned on dense
+   bass-clef grace passages), not a crop/tiling change in our pipeline.
 
 2. **`binchois` multi-part assembly (the unskip blocker).** This was previously
    filed as a system-grouping fix, but measuring the real four-staff recovery
