@@ -102,4 +102,16 @@ integration-test: build node_modules
 omr-integration-test: node_modules
 	$(playwright_omr) test --config lib/import-image/playwright.omr.config.ts $(ARGS)
 
+# Compare HOMR (https://github.com/liebharc/homr, AGPL-3.0) against our
+# integration test fixtures. Step 1: install HOMR and run it on each fixture
+# image (outputs to lib/import-image/tmp/homr-output/). Step 2: diff the
+# recovered MusicXML against source scores and print a side-by-side report.
+# HOMR downloads its own model weights (~100 MB) on first use, cached in
+# .homr-cache/ (XDG_CACHE_HOME). Idempotent: already-recovered fixtures are
+# skipped (delete tmp/homr-output/<name>.musicxml to re-run one).
+homr-comparison: node_modules
+	docker compose run --rm homr sh -c \
+		'pip install --quiet homr && cd lib/import-image && python scripts/run-homr.py'
+	$(call in_import_image,bun run scripts/compare-homr.ts)
+
 pr-ready: format lint typecheck build unit-test

@@ -69,3 +69,18 @@ services:
       - NETLIFY_AUTH_TOKEN
       - NETLIFY_SITE_ID
       - NETLIFY_CLI_VERSION
+
+  # One-off: run HOMR (https://github.com/liebharc/homr, AGPL-3.0) on the OMR
+  # integration test fixtures to compare its accuracy against our pipeline (run
+  # via `make homr-comparison`). HOMR is AGPL — this container keeps it isolated
+  # from the rest of the codebase. pip-installed at run time; model weights are
+  # downloaded by HOMR on first use and cached in .homr-cache/.
+  homr:
+    image: python:3.11-slim
+    command: echo
+    volumes:
+      - ${PWD}:${PWD}
+    working_dir: ${PWD}
+    environment:
+      - PIP_CACHE_DIR=${PWD}/.pip-cache
+      - XDG_CACHE_HOME=${PWD}/.homr-cache
