@@ -8,13 +8,7 @@
 // narrows to one note, a right-click / long-press opens a context menu, and the
 // arrow keys nudge a focused note. A plain drag only scrolls the staff.
 
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "preact/hooks";
+import { useCallback, useEffect, useMemo, useState } from "preact/hooks";
 import { ContextMenu, type ContextMenuItem } from "./components/ContextMenu";
 import {
   beatsForDuration,
@@ -49,6 +43,7 @@ import {
   type NoteType,
   parseScore,
 } from "./sheet-music/index";
+import { useHistory } from "./use-history";
 import { isImportableImage, useImageImport } from "./use-image-import";
 
 // A focused single note draws stronger than the rest of its selected chord.
@@ -75,6 +70,20 @@ function sameChord(a: ChordSelection, b: ChordSelection): boolean {
   return a.measureIndex === b.measureIndex && a.onsetBeat === b.onsetBeat;
 }
 
+// Shared style for the plain toolbar buttons (Undo/Redo/Delete), dimmed when
+// disabled.
+function toolbarButtonStyle(enabled: boolean) {
+  return {
+    padding: "6px 12px",
+    borderRadius: 6,
+    border: "1px solid #ccc",
+    background: "#fff",
+    color: enabled ? "#333" : "#aaa",
+    cursor: enabled ? "pointer" : "default",
+    fontSize: 14,
+  } as const;
+}
+
 // The single note edits (nudge) act on: an explicitly focused note, or a chord
 // that holds exactly one note. A multi-note chord has no unambiguous target.
 function focusedHandle(selection: Selection): NoteHandle | null {
@@ -90,24 +99,21 @@ function focusedHandle(selection: Selection): NoteHandle | null {
 }
 
 export function Editor() {
-  const documentRef = useRef<Document | null>(null);
-  if (documentRef.current === null) {
-    documentRef.current = createBlankDocument();
-  }
-  const [version, setVersion] = useState(0);
+  // Undo/redo + dirty tracking own the live document, the version counter, and
+  // commit. The document is still mutated in place; commit snapshots it.
+  const history = useHistory(createBlankDocument);
+  const { documentRef, version, commit } = history;
   const [selectedDuration, setSelectedDuration] = useState<NoteType>("quarter");
   const [selection, setSelection] = useState<Selection>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const imageImport = useImageImport();
 
-  // Bump the version after every document mutation so the render recomputes.
-  const commit = useCallback(() => setVersion((v) => v + 1), []);
-
   // biome-ignore lint/correctness/useExhaustiveDependencies: version drives re-serialize after in-place mutations
   const musicxml = useMemo(
-    () => serializeDocument(documentRef.current as Document),
+    () => serializeDocument(documentRef.current),
     [version],
   );
+  const dirty = musicxml !== history.baselineXml;
   const score = useMemo(() => parseScore(musicxml), [musicxml]);
   const measureStartBeats = useMemo(
     () => computeMeasureStartBeats(score),
@@ -137,7 +143,7 @@ export function Editor() {
   const handleTap = useCallback(
     (gesture: EditorGesture) => {
       setMenu(null);
-      const doc = documentRef.current as Document;
+      const doc = documentRef.current;
       if (gesture.hit) {
         const picked = gesture.hit.handle;
         const chord = chordForHandle(score, picked);
@@ -169,10 +175,10 @@ export function Editor() {
       });
       if (handle) {
         setSelection({ kind: "note", handle });
+        commit();
       }
-      commit();
     },
-    [commit, measureStartBeats, score, selectedDuration],
+    [commit, documentRef, measureStartBeats, score, selectedDuration],
   );
 
   // Right-click / long-press: select the chord at that beat (keeping a focused
@@ -206,7 +212,7 @@ export function Editor() {
       if (!handle) {
         return;
       }
-      const doc = documentRef.current as Document;
+      const doc = documentRef.current;
       const pitch = pitchForHandle(score, handle);
       const chord = chordForHandle(score, handle);
       if (!pitch || !chord) {
@@ -228,10 +234,11 @@ export function Editor() {
       const moved = moveNote(doc, handle, target);
       if (moved) {
         setSelection({ kind: "note", handle: moved });
-        commit();
+        // Coalesce a rapid run of nudges into one undo entry.
+        commit({ coalesce: "nudge" });
       }
     },
-    [commit, measureStartBeats, score, selection],
+    [commit, documentRef, measureStartBeats, score, selection],
   );
 
   const deleteSelection = useCallback(() => {
@@ -240,15 +247,45 @@ export function Editor() {
     }
     const handles =
       selection.kind === "note" ? [selection.handle] : selection.chord.handles;
-    removeNotes(documentRef.current as Document, handles);
+    removeNotes(documentRef.current, handles);
     setSelection(null);
     setMenu(null);
     commit();
-  }, [commit, selection]);
+  }, [commit, documentRef, selection]);
 
-  // Delete / Backspace removes the selection; arrow keys nudge a focused note.
+  // Undo/redo also drop the selection + menu: the prior handles may no longer
+  // resolve against the restored document.
+  const undo = useCallback(() => {
+    history.undo();
+    setSelection(null);
+    setMenu(null);
+  }, [history]);
+
+  const redo = useCallback(() => {
+    history.redo();
+    setSelection(null);
+    setMenu(null);
+  }, [history]);
+
+  // Delete / Backspace removes the selection; arrow keys nudge a focused note;
+  // Ctrl/Cmd+Z undoes, Ctrl/Cmd+Shift+Z (or Ctrl+Y) redoes.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      const mod = event.metaKey || event.ctrlKey;
+      if (mod && (event.key === "z" || event.key === "Z")) {
+        event.preventDefault();
+        if (event.shiftKey) {
+          redo();
+        } else {
+          undo();
+        }
+        return;
+      }
+      if (mod && (event.key === "y" || event.key === "Y")) {
+        event.preventDefault();
+        redo();
+        return;
+      }
       switch (event.key) {
         case "Delete":
         case "Backspace":
@@ -277,7 +314,7 @@ export function Editor() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [deleteSelection, nudge]);
+  }, [deleteSelection, nudge, undo, redo]);
 
   const onImport = useCallback(
     async (event: Event) => {
@@ -297,12 +334,12 @@ export function Editor() {
       if (musicxml === null) {
         return;
       }
-      documentRef.current = parseDocument(musicxml);
+      // A fresh load resets history and the dirty baseline to the import.
+      history.reset(parseDocument(musicxml));
       setSelection(null);
       setMenu(null);
-      commit();
     },
-    [commit, imageImport],
+    [history, imageImport],
   );
 
   const onExport = useCallback(() => {
@@ -313,7 +350,9 @@ export function Editor() {
     anchor.download = "score.musicxml";
     anchor.click();
     URL.revokeObjectURL(url);
-  }, [musicxml]);
+    // The on-disk file now matches the document: clear the dirty marker.
+    history.markSaved();
+  }, [history, musicxml]);
 
   // Items depend on the selection: nudges need an unambiguous focused note.
   const canNudge = focusedHandle(selection) !== null;
@@ -367,21 +406,52 @@ export function Editor() {
         />
         <button
           type="button"
+          onClick={undo}
+          disabled={!history.canUndo}
+          style={toolbarButtonStyle(history.canUndo)}
+        >
+          Undo
+        </button>
+        <button
+          type="button"
+          onClick={redo}
+          disabled={!history.canRedo}
+          style={toolbarButtonStyle(history.canRedo)}
+        >
+          Redo
+        </button>
+        <button
+          type="button"
           onClick={deleteSelection}
           disabled={!hasSelection}
-          style={{
-            padding: "6px 12px",
-            borderRadius: 6,
-            border: "1px solid #ccc",
-            background: "#fff",
-            color: hasSelection ? "#333" : "#aaa",
-            cursor: hasSelection ? "pointer" : "default",
-            fontSize: 14,
-          }}
+          style={toolbarButtonStyle(hasSelection)}
         >
           Delete
         </button>
         <span style={{ flex: 1 }} />
+        {dirty ? (
+          <span
+            aria-label="Unsaved changes"
+            title="Unsaved changes"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: 13,
+              color: "#8a6d3b",
+            }}
+          >
+            <span
+              style={{
+                width: 8,
+                height: 8,
+                borderRadius: "50%",
+                background: "#f59e0b",
+              }}
+            />
+            Unsaved
+          </span>
+        ) : null}
         <label
           style={{
             padding: "6px 12px",
