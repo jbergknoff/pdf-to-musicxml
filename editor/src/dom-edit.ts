@@ -77,13 +77,38 @@ export function parseDocument(xml: string): Document {
   return doc;
 }
 
-// Serialize the live document back to a MusicXML string. The `<score-partwise>`
-// root is serialized (rather than the whole Document) so the linkedom test
-// shim, which exposes `outerHTML` on elements, works the same as the browser's
-// real XMLSerializer.
+// Reconstruct a `<!DOCTYPE …>` line from a parsed doctype node. Real MusicXML
+// carries `<!DOCTYPE score-partwise PUBLIC "…" "…">`; preserving it keeps the
+// export valid against the MusicXML DTD.
+//
+// Note: the browser's DOMParser parses the doctype faithfully (full name +
+// PUBLIC/SYSTEM ids), so production exports round-trip it byte-for-byte. The
+// linkedom test shim mis-parses XML doctypes (it truncates the name at the
+// first hyphen and drops the ids), so under `bun test` this only emits a
+// degraded `<!DOCTYPE score>` — enough to prove the doctype is no longer
+// dropped, which is the regression Phase 1 guards against.
+function doctypeString(doctype: DocumentType): string {
+  let result = `<!DOCTYPE ${doctype.name}`;
+  if (doctype.publicId) {
+    result += ` PUBLIC "${doctype.publicId}" "${doctype.systemId}"`;
+  } else if (doctype.systemId) {
+    result += ` SYSTEM "${doctype.systemId}"`;
+  }
+  return `${result}>`;
+}
+
+// Serialize the live document back to a MusicXML string. The XML declaration
+// and the DOCTYPE (when present) are emitted explicitly, then the
+// `<score-partwise>` root: serializing the root element (rather than the whole
+// Document) keeps the linkedom test shim — which exposes `outerHTML` on
+// elements but not on a Document — behaving like the browser's real
+// XMLSerializer. The doctype is reconstructed from `doc.doctype` rather than
+// relying on `serializeToString(doc)` so the same code path works in both.
 export function serializeDocument(doc: Document): string {
   const root = doc.documentElement;
-  return `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(
+  const declaration = `<?xml version="1.0" encoding="UTF-8"?>`;
+  const doctype = doc.doctype ? `${doctypeString(doc.doctype)}\n` : "";
+  return `${declaration}\n${doctype}${new XMLSerializer().serializeToString(
     root,
   )}`;
 }
