@@ -22,6 +22,7 @@ import {
 import {
   addNote,
   createBlankDocument,
+  isEditableDocument,
   moveNote,
   type NoteHandle,
   parseDocument,
@@ -119,6 +120,14 @@ export function Editor() {
     () => computeMeasureStartBeats(score),
     [score],
   );
+  // Whether the loaded document is in the editor's supported single-staff shape.
+  // Multi-staff / multi-voice files are view-only: their notes carry no source
+  // provenance to select by, and the single-voice ops would corrupt them.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: version tracks the live document
+  const editable = useMemo(
+    () => isEditableDocument(documentRef.current),
+    [version],
+  );
 
   // Selection highlights are re-derived from handles each render (ids change as
   // notes are added/removed): the focused note draws strong, chord-mates light.
@@ -143,6 +152,11 @@ export function Editor() {
   const handleTap = useCallback(
     (gesture: EditorGesture) => {
       setMenu(null);
+      // View-only documents: a tap must never add or select (the ops can't edit
+      // them and there's no provenance to select by).
+      if (!editable) {
+        return;
+      }
       const doc = documentRef.current;
       if (gesture.hit) {
         const picked = gesture.hit.handle;
@@ -178,13 +192,16 @@ export function Editor() {
         commit();
       }
     },
-    [commit, documentRef, measureStartBeats, score, selectedDuration],
+    [commit, documentRef, editable, measureStartBeats, score, selectedDuration],
   );
 
   // Right-click / long-press: select the chord at that beat (keeping a focused
   // note if it belongs to that chord) and open the menu at the pointer.
   const handleContextMenu = useCallback(
     (request: ContextMenuRequest) => {
+      if (!editable) {
+        return;
+      }
       const chord = chordAtBeat(score, request.beat);
       if (!chord) {
         setMenu(null);
@@ -201,7 +218,7 @@ export function Editor() {
       });
       setMenu({ x: request.clientX, y: request.clientY });
     },
-    [score],
+    [editable, score],
   );
 
   // Move the focused note by a diatonic step (pitch) or a beat (onset). Used by
@@ -494,6 +511,21 @@ export function Editor() {
       {imageImport.error !== null ? (
         <div style={{ fontSize: 13, color: "#c62828" }}>
           Import failed: {imageImport.error}
+        </div>
+      ) : null}
+      {!editable ? (
+        <div
+          style={{
+            fontSize: 13,
+            color: "#8a6d3b",
+            background: "#fff8e1",
+            border: "1px solid #f0e0a0",
+            borderRadius: 6,
+            padding: "6px 10px",
+          }}
+        >
+          This score uses multiple staves or voices, which the editor can't edit
+          yet — it's view-only. Editing tools are disabled.
         </div>
       ) : null}
       <div style={{ flex: 1, minHeight: 0 }}>

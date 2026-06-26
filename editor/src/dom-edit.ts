@@ -113,6 +113,27 @@ export function serializeDocument(doc: Document): string {
   )}`;
 }
 
+// Whether the editor's surgical, single-voice ops can safely edit this
+// document. They assume **one part, one staff, and no interleaved voices**
+// (`<backup>`). A grand-staff piano part (multiple `<staves>` / `<backup>`) or a
+// multi-part score is view-only for now: not only would `writeMeasure` flatten
+// it to a single voice, but the multi-staff parser also leaves its notes without
+// the `source` provenance the editor selects and edits through. Mirrors the
+// parser's `isMultiStaffPart` so the editor's notion of "editable" matches what
+// the parser can map back to handles.
+export function isEditableDocument(doc: Document): boolean {
+  const parts = Array.from(doc.querySelectorAll("part"));
+  if (parts.length !== 1) {
+    return false;
+  }
+  const part = parts[0];
+  const staves = part.querySelector("staves")?.textContent;
+  if (staves && Number.parseInt(staves, 10) > 1) {
+    return false;
+  }
+  return part.querySelector("backup") === null;
+}
+
 // The `<measure>` elements of the (single) part, in document order.
 function measuresOf(doc: Document): Element[] {
   const part = doc.querySelector("part");

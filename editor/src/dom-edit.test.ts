@@ -4,6 +4,7 @@ import { describe, expect, test } from "bun:test";
 import {
   addNote,
   createBlankDocument,
+  isEditableDocument,
   moveNote,
   type NoteHandle,
   parseDocument,
@@ -344,6 +345,49 @@ describe("round-trip", () => {
     expect(sliceMeasure(after, 5)).toBe(measure5Before);
     // The edit did land somewhere: the whole document is not byte-identical.
     expect(after).not.toBe(before);
+  });
+});
+
+describe("isEditableDocument", () => {
+  test("a blank single-staff document is editable", () => {
+    expect(isEditableDocument(createBlankDocument())).toBe(true);
+  });
+
+  test("a single-staff file with notes is editable", () => {
+    const doc = createBlankDocument();
+    addNote(doc, {
+      measureIndex: 0,
+      onsetBeatInMeasure: 0,
+      durationBeats: 1,
+      pitch: { step: "C", alter: 0, octave: 5 },
+    });
+    expect(isEditableDocument(doc)).toBe(true);
+  });
+
+  test("a grand-staff part (multiple staves + backup) is view-only", () => {
+    const rondo = readFileSync(
+      fileURLToPath(
+        new URL(
+          "./__fixtures__/rondo-alla-turca-clip.musicxml",
+          import.meta.url,
+        ),
+      ),
+      "utf8",
+    );
+    expect(isEditableDocument(parseDocument(rondo))).toBe(false);
+  });
+
+  test("a multi-part score is view-only", () => {
+    const twoParts = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <part-list>
+    <score-part id="P1"><part-name>One</part-name></score-part>
+    <score-part id="P2"><part-name>Two</part-name></score-part>
+  </part-list>
+  <part id="P1"><measure number="1"></measure></part>
+  <part id="P2"><measure number="1"></measure></part>
+</score-partwise>`;
+    expect(isEditableDocument(parseDocument(twoParts))).toBe(false);
   });
 });
 
