@@ -42,9 +42,10 @@ typecheck: node_modules
 	$(tsc) --noEmit
 
 # Editor tests plus the OMR pipeline's lib/src tests. Scoped to those trees so
-# `bun test` does not pick up lib/import-image/tests/ (Playwright integration).
+# `bun test` does not pick up the Playwright integration specs (editor/tests/
+# and lib/import-image/tests/), which only run under Playwright.
 unit-test: node_modules
-	$(bun) test editor lib/import-image/lib lib/import-image/src
+	$(bun) test editor/src lib/import-image/lib lib/import-image/src
 
 # Build the editor SPA (+ the bundled OMR worker and its ORT/pdf.js assets) into
 # editor/dist. This is the Netlify build target (see netlify.toml).
