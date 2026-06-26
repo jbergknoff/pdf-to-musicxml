@@ -1,11 +1,20 @@
 import { describe, expect, test } from "bun:test";
-import { addNote, createBlankDocument, serializeDocument } from "./dom-edit";
+import {
+  addNote,
+  createBlankDocument,
+  type NoteHandle,
+  serializeDocument,
+} from "./dom-edit";
 import {
   beatFromX,
+  chordAtBeat,
+  chordForHandle,
   idForHandle,
   locateBeat,
   pickNote,
+  pitchForHandle,
   pitchFromY,
+  stepPitch,
 } from "./hit-test";
 import {
   computeMeasureStartBeats,
@@ -110,5 +119,99 @@ describe("pickNote", () => {
     const score = parseScore(serializeDocument(doc));
     // Far away in both beat and pitch.
     expect(pickNote(score, 3.5, { step: "C", alter: 0, octave: 3 })).toBeNull();
+  });
+});
+
+// Build a blank score with notes at the given (onsetBeatInMeasure, pitch) and
+// return the parsed score plus each note's handle.
+function scoreWithNotes(
+  notes: Array<{ onset: number; step: Pitch["step"]; octave: number }>,
+): { score: ReturnType<typeof parseScore>; handles: NoteHandle[] } {
+  const doc = createBlankDocument();
+  const handles = notes.map(
+    (note) =>
+      addNote(doc, {
+        measureIndex: 0,
+        onsetBeatInMeasure: note.onset,
+        durationBeats: 1,
+        pitch: { step: note.step, alter: 0, octave: note.octave },
+      }) as NoteHandle,
+  );
+  return { score: parseScore(serializeDocument(doc)), handles };
+}
+
+describe("chordForHandle", () => {
+  test("resolves a note to its onset group", () => {
+    const { score, handles } = scoreWithNotes([
+      { onset: 0, step: "C", octave: 5 },
+      { onset: 1, step: "E", octave: 5 },
+    ]);
+    const chord = chordForHandle(score, handles[1]);
+    expect(chord).not.toBeNull();
+    expect(chord?.measureIndex).toBe(0);
+    expect(chord?.onsetBeat).toBe(1);
+    expect(chord?.handles).toEqual([handles[1]]);
+  });
+
+  test("returns null for a handle that no longer resolves", () => {
+    const { score } = scoreWithNotes([{ onset: 0, step: "C", octave: 5 }]);
+    expect(
+      chordForHandle(score, { measureIndex: 9, noteElementIndex: 9 }),
+    ).toBeNull();
+  });
+});
+
+describe("chordAtBeat", () => {
+  test("returns the chord whose onset is nearest the beat", () => {
+    const { score } = scoreWithNotes([
+      { onset: 0, step: "C", octave: 5 },
+      { onset: 2, step: "G", octave: 5 },
+    ]);
+    expect(chordAtBeat(score, 1.9)?.onsetBeat).toBe(2);
+    expect(chordAtBeat(score, 0.2)?.onsetBeat).toBe(0);
+  });
+
+  test("returns null when nothing is within tolerance", () => {
+    const { score } = scoreWithNotes([{ onset: 0, step: "C", octave: 5 }]);
+    expect(chordAtBeat(score, 3.5)).toBeNull();
+  });
+});
+
+describe("pitchForHandle", () => {
+  test("reads the pitch a handle points at", () => {
+    const { score, handles } = scoreWithNotes([
+      { onset: 0, step: "F", octave: 4 },
+    ]);
+    expect(pitchForHandle(score, handles[0])).toEqual({
+      step: "F",
+      alter: 0,
+      octave: 4,
+    });
+  });
+});
+
+describe("stepPitch", () => {
+  test("steps up and down the diatonic scale, crossing octaves", () => {
+    expect(stepPitch({ step: "C", alter: 0, octave: 5 }, 1)).toEqual({
+      step: "D",
+      alter: 0,
+      octave: 5,
+    });
+    expect(stepPitch({ step: "B", alter: 0, octave: 4 }, 1)).toEqual({
+      step: "C",
+      alter: 0,
+      octave: 5,
+    });
+    expect(stepPitch({ step: "C", alter: 0, octave: 5 }, -1)).toEqual({
+      step: "B",
+      alter: 0,
+      octave: 4,
+    });
+    // A sharp note loses its accidental (the editor's no-accidental scope).
+    expect(stepPitch({ step: "F", alter: 1, octave: 5 }, 1)).toEqual({
+      step: "G",
+      alter: 0,
+      octave: 5,
+    });
   });
 });

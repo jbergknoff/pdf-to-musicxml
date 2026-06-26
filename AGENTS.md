@@ -56,6 +56,11 @@ make lint          # biome lint
 make typecheck     # tsc --noEmit
 make unit-test     # bun test editor + lib/import-image lib/src
 make integration-test # Playwright (lib/import-image/playwright.config.ts)
+make editor-integration-test # Playwright editor editing-flow tests
+                   # (playwright.editor.config.ts): select/delete/undo, the
+                   # no-insert-on-empty-tap and view-only guards for multi-staff
+                   # scores, driving the served editor/dist in the pinned browser
+                   # image.
 make omr-integration-test # end-to-end OMR: real pipeline (Node/CPU) over
                    # musicxml.com fixture images, diffing the recovered MusicXML
                    # against each fixture's source score (only codified

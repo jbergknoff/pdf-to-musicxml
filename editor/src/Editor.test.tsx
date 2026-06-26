@@ -19,11 +19,21 @@ describe("Editor", () => {
     );
     expect(staffLines.length).toBe(5);
 
-    // The duration palette and the Import/Export controls are present.
+    // The edit/history controls and Import/Export are all present.
     const labels = Array.from(container.querySelectorAll("button, label")).map(
       (el) => el.textContent,
     );
-    expect(labels).toContain("Quarter");
+    expect(labels).toContain("Undo");
+    expect(labels).toContain("Redo");
+    expect(labels).toContain("Delete");
     expect(labels).toContain("Export");
+
+    // Undo/Redo start disabled (nothing in history yet).
+    const button = (text: string) =>
+      Array.from(container.querySelectorAll("button")).find(
+        (el) => el.textContent === text,
+      );
+    expect(button("Undo")?.hasAttribute("disabled")).toBe(true);
+    expect(button("Redo")?.hasAttribute("disabled")).toBe(true);
   });
 });

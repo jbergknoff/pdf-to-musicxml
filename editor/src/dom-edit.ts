@@ -77,15 +77,61 @@ export function parseDocument(xml: string): Document {
   return doc;
 }
 
-// Serialize the live document back to a MusicXML string. The `<score-partwise>`
-// root is serialized (rather than the whole Document) so the linkedom test
-// shim, which exposes `outerHTML` on elements, works the same as the browser's
-// real XMLSerializer.
+// Reconstruct a `<!DOCTYPE …>` line from a parsed doctype node. Real MusicXML
+// carries `<!DOCTYPE score-partwise PUBLIC "…" "…">`; preserving it keeps the
+// export valid against the MusicXML DTD.
+//
+// Note: the browser's DOMParser parses the doctype faithfully (full name +
+// PUBLIC/SYSTEM ids), so production exports round-trip it byte-for-byte. The
+// linkedom test shim mis-parses XML doctypes (it truncates the name at the
+// first hyphen and drops the ids), so under `bun test` this only emits a
+// degraded `<!DOCTYPE score>` — enough to prove the doctype is no longer
+// dropped, which is the regression Phase 1 guards against.
+function doctypeString(doctype: DocumentType): string {
+  let result = `<!DOCTYPE ${doctype.name}`;
+  if (doctype.publicId) {
+    result += ` PUBLIC "${doctype.publicId}" "${doctype.systemId}"`;
+  } else if (doctype.systemId) {
+    result += ` SYSTEM "${doctype.systemId}"`;
+  }
+  return `${result}>`;
+}
+
+// Serialize the live document back to a MusicXML string. The XML declaration
+// and the DOCTYPE (when present) are emitted explicitly, then the
+// `<score-partwise>` root: serializing the root element (rather than the whole
+// Document) keeps the linkedom test shim — which exposes `outerHTML` on
+// elements but not on a Document — behaving like the browser's real
+// XMLSerializer. The doctype is reconstructed from `doc.doctype` rather than
+// relying on `serializeToString(doc)` so the same code path works in both.
 export function serializeDocument(doc: Document): string {
   const root = doc.documentElement;
-  return `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(
+  const declaration = `<?xml version="1.0" encoding="UTF-8"?>`;
+  const doctype = doc.doctype ? `${doctypeString(doc.doctype)}\n` : "";
+  return `${declaration}\n${doctype}${new XMLSerializer().serializeToString(
     root,
   )}`;
+}
+
+// Whether the editor's surgical, single-voice ops can safely edit this
+// document. They assume **one part, one staff, and no interleaved voices**
+// (`<backup>`). A grand-staff piano part (multiple `<staves>` / `<backup>`) or a
+// multi-part score is view-only for now: not only would `writeMeasure` flatten
+// it to a single voice, but the multi-staff parser also leaves its notes without
+// the `source` provenance the editor selects and edits through. Mirrors the
+// parser's `isMultiStaffPart` so the editor's notion of "editable" matches what
+// the parser can map back to handles.
+export function isEditableDocument(doc: Document): boolean {
+  const parts = Array.from(doc.querySelectorAll("part"));
+  if (parts.length !== 1) {
+    return false;
+  }
+  const part = parts[0];
+  const staves = part.querySelector("staves")?.textContent;
+  if (staves && Number.parseInt(staves, 10) > 1) {
+    return false;
+  }
+  return part.querySelector("backup") === null;
 }
 
 // The `<measure>` elements of the (single) part, in document order.
@@ -473,6 +519,33 @@ function elementForHandle(doc: Document, handle: NoteHandle): Element | null {
     Array.from(measureEl.querySelectorAll("note"))[handle.noteElementIndex] ??
     null
   );
+}
+
+// Remove several notes at once (e.g. every member of a selected chord). All
+// target elements are resolved up front — while the handles are still valid
+// against the current document — and each affected measure is rebuilt once, so
+// the index shifts a sequence of single removals would cause cannot occur.
+export function removeNotes(doc: Document, handles: NoteHandle[]): void {
+  const elements = handles
+    .map((handle) => elementForHandle(doc, handle))
+    .filter((element): element is Element => element !== null);
+  if (elements.length === 0) {
+    return;
+  }
+  const { divisions, divisionsPerMeasure } = measureMetrics(doc);
+  const removeSet = new Set(elements);
+  const measureEls = new Set<Element>();
+  for (const element of elements) {
+    if (element.parentElement) {
+      measureEls.add(element.parentElement);
+    }
+  }
+  for (const measureEl of measureEls) {
+    const notes = readRealNotes(measureEl, divisions).filter(
+      (note) => !removeSet.has(note.element),
+    );
+    writeMeasure(doc, measureEl, notes, divisionsPerMeasure);
+  }
 }
 
 // Remove a note; its span becomes rest (rebalanced by writeMeasure).

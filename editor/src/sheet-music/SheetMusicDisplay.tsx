@@ -880,6 +880,15 @@ interface SheetMusicDisplayProps {
   onStagePointerDown?: (info: StagePointerInfo, event: PointerEvent) => void;
   onStagePointerMove?: (info: StagePointerInfo, event: PointerEvent) => void;
   onStagePointerUp?: (info: StagePointerInfo, event: PointerEvent) => void;
+  /**
+   * Whether the stage pointer-down captures the pointer and stops propagation.
+   * Defaults to true (the original drag-to-edit behavior, where the SVG owns
+   * the whole gesture). Set false for a click-to-select editor that wants plain
+   * drags to fall through to the container's drag-to-scroll: the down still
+   * reports its gesture, but the pointer is left uncaptured so the container
+   * scrolls.
+   */
+  captureStagePointer?: boolean;
 }
 
 /** Payload handed to the editor pointer-seam callbacks (see props above). */
@@ -913,6 +922,7 @@ export function SheetMusicDisplay({
   onStagePointerDown,
   onStagePointerMove,
   onStagePointerUp,
+  captureStagePointer = true,
 }: SheetMusicDisplayProps) {
   const result = useMemo(() => {
     try {
@@ -1409,9 +1419,13 @@ export function SheetMusicDisplay({
                     return;
                   }
                   // Keep the gesture on the SVG and off the container's
-                  // drag-to-scroll listener while editing.
-                  event.stopPropagation();
-                  svgRef.current?.setPointerCapture(event.pointerId);
+                  // drag-to-scroll listener while editing. A click-to-select
+                  // editor opts out (captureStagePointer=false) so a plain drag
+                  // still reaches the container and scrolls.
+                  if (captureStagePointer) {
+                    event.stopPropagation();
+                    svgRef.current?.setPointerCapture(event.pointerId);
+                  }
                   onStagePointerDown(info, event);
                 }
               : undefined
@@ -1432,7 +1446,12 @@ export function SheetMusicDisplay({
               ? (e) => {
                   const event = e as unknown as PointerEvent;
                   const info = stagePointerInfo(event);
-                  svgRef.current?.releasePointerCapture(event.pointerId);
+                  if (
+                    captureStagePointer &&
+                    svgRef.current?.hasPointerCapture(event.pointerId)
+                  ) {
+                    svgRef.current.releasePointerCapture(event.pointerId);
+                  }
                   if (info) {
                     onStagePointerUp(info, event);
                   }

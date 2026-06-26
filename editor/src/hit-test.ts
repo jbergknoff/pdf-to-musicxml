@@ -184,3 +184,106 @@ export function idForHandle(
   }
   return null;
 }
+
+function sameHandle(a: NoteHandle, b: NoteHandle): boolean {
+  return (
+    a.measureIndex === b.measureIndex &&
+    a.noteElementIndex === b.noteElementIndex
+  );
+}
+
+// A chord = the notes a single beat sounds together: every parsed note sharing
+// one onset (a `ChordGroup`). `onsetBeat` is absolute; `handles` are the source
+// handles of all its real notes (chord members included). The selection model
+// builds on these so a click can select the whole beat before narrowing.
+export interface ChordSelection {
+  measureIndex: number;
+  onsetBeat: number;
+  handles: NoteHandle[];
+}
+
+// Enumerate every chord (onset group) with its absolute beat and note handles.
+// Mirrors `pickableNotes`' beat-cursor walk but groups by `ChordGroup` rather
+// than flattening to individual notes.
+function pickableChords(score: ParsedScore): ChordSelection[] {
+  const measureStartBeats = computeMeasureStartBeats(score);
+  const result: ChordSelection[] = [];
+  for (const part of score.parts) {
+    part.measures.forEach((measure, measureIndex) => {
+      let beatCursor = measureStartBeats[measureIndex] ?? 0;
+      const divisions = measure.divisions || 4;
+      for (const event of measure.events) {
+        if (isRest(event)) {
+          beatCursor += event.duration / divisions;
+          continue;
+        }
+        const group = event as ChordGroup;
+        const handles = group.notes
+          .map((note) => note.source)
+          .filter((source): source is NoteHandle => source !== undefined);
+        if (handles.length > 0) {
+          result.push({ measureIndex, onsetBeat: beatCursor, handles });
+        }
+        beatCursor += group.duration / divisions;
+      }
+    });
+  }
+  return result;
+}
+
+// The chord (onset group) a known note belongs to, or null if the handle no
+// longer resolves. Used to widen a picked note to its whole beat.
+export function chordForHandle(
+  score: ParsedScore,
+  handle: NoteHandle,
+): ChordSelection | null {
+  for (const chord of pickableChords(score)) {
+    if (chord.handles.some((candidate) => sameHandle(candidate, handle))) {
+      return chord;
+    }
+  }
+  return null;
+}
+
+// The chord whose onset is closest to `beat`, within `tolerance` quarter-note
+// beats — used to resolve a right-click (which carries a beat but no pitch) to
+// a selection. Returns null when no chord is near enough.
+export function chordAtBeat(
+  score: ParsedScore,
+  beat: number,
+  tolerance = 1.5,
+): ChordSelection | null {
+  let best: ChordSelection | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const chord of pickableChords(score)) {
+    const distance = Math.abs(chord.onsetBeat - beat);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = chord;
+    }
+  }
+  return best && bestDistance <= tolerance ? best : null;
+}
+
+// The pitch of the note a handle refers to, or null if it no longer resolves.
+export function pitchForHandle(
+  score: ParsedScore,
+  handle: NoteHandle,
+): Pitch | null {
+  for (const note of pickableNotes(score)) {
+    if (sameHandle(note.handle, handle)) {
+      return note.pitch;
+    }
+  }
+  return null;
+}
+
+// Shift a pitch by a number of diatonic steps (±1 = one staff position). The
+// result is natural (`alter: 0`), matching the editor's no-accidental scope
+// (`pitchFromY` likewise infers no accidentals).
+export function stepPitch(pitch: Pitch, deltaSteps: number): Pitch {
+  const index = diatonicIndex(pitch) + deltaSteps;
+  const octave = Math.floor(index / 7);
+  const stepIndex = ((index % 7) + 7) % 7;
+  return { step: STEPS[stepIndex], alter: 0, octave };
+}

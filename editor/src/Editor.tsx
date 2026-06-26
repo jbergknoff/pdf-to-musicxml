@@ -2,153 +2,315 @@
 // selection, and import/export. The Document is the source of truth (held in a
 // ref); a `version` counter forces a re-render after each in-place mutation, and
 // the serialized string is recomputed from it.
+//
+// Interaction is click-to-select, not drag-to-edit: a tap selects the chord at
+// a beat, a second tap (or a tap on a note already in the selected chord)
+// narrows to one note, a right-click / long-press opens a context menu, and the
+// arrow keys nudge a focused note. A plain drag only scrolls the staff.
 
+import { useCallback, useEffect, useMemo, useState } from "preact/hooks";
+import { ContextMenu, type ContextMenuItem } from "./components/ContextMenu";
 import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "preact/hooks";
-import {
-  beatsForDuration,
-  DurationPalette,
-} from "./components/DurationPalette";
-import {
+  type ContextMenuRequest,
   EditableSheetMusic,
   type EditorGesture,
 } from "./components/EditableSheetMusic";
 import {
-  addNote,
   createBlankDocument,
+  isEditableDocument,
   moveNote,
   type NoteHandle,
   parseDocument,
-  removeNote,
+  removeNotes,
   serializeDocument,
 } from "./dom-edit";
-import { idForHandle, locateBeat } from "./hit-test";
+import {
+  chordAtBeat,
+  type ChordSelection,
+  chordForHandle,
+  idForHandle,
+  locateBeat,
+  pitchForHandle,
+  stepPitch,
+} from "./hit-test";
 import {
   computeMeasureStartBeats,
   type NoteHighlight,
-  type NoteType,
   parseScore,
 } from "./sheet-music/index";
+import { useHistory } from "./use-history";
 import { isImportableImage, useImageImport } from "./use-image-import";
 
-const SELECTION_COLOR = "#1976d2";
+// A focused single note draws stronger than the rest of its selected chord.
+const FOCUS_COLOR = "#1976d2";
+const CHORD_COLOR = "#90caf9";
+// Arrow-key (and context-menu) horizontal nudge, in quarter-note beats.
+const BEAT_STEP = 1;
+
+// The current selection: either a whole chord (every note at one beat) or one
+// focused note. Both follow their notes across edits via the stable handles.
+type Selection =
+  | { kind: "chord"; chord: ChordSelection }
+  | { kind: "note"; handle: NoteHandle }
+  | null;
+
+function sameHandle(a: NoteHandle, b: NoteHandle): boolean {
+  return (
+    a.measureIndex === b.measureIndex &&
+    a.noteElementIndex === b.noteElementIndex
+  );
+}
+
+function sameChord(a: ChordSelection, b: ChordSelection): boolean {
+  return a.measureIndex === b.measureIndex && a.onsetBeat === b.onsetBeat;
+}
+
+// Shared style for the plain toolbar buttons (Undo/Redo/Delete), dimmed when
+// disabled.
+function toolbarButtonStyle(enabled: boolean) {
+  return {
+    padding: "6px 12px",
+    borderRadius: 6,
+    border: "1px solid #ccc",
+    background: "#fff",
+    color: enabled ? "#333" : "#aaa",
+    cursor: enabled ? "pointer" : "default",
+    fontSize: 14,
+  } as const;
+}
+
+// The single note edits (nudge) act on: an explicitly focused note, or a chord
+// that holds exactly one note. A multi-note chord has no unambiguous target.
+function focusedHandle(selection: Selection): NoteHandle | null {
+  if (!selection) {
+    return null;
+  }
+  if (selection.kind === "note") {
+    return selection.handle;
+  }
+  return selection.chord.handles.length === 1
+    ? selection.chord.handles[0]
+    : null;
+}
 
 export function Editor() {
-  const documentRef = useRef<Document | null>(null);
-  if (documentRef.current === null) {
-    documentRef.current = createBlankDocument();
-  }
-  const [version, setVersion] = useState(0);
-  const [selectedDuration, setSelectedDuration] = useState<NoteType>("quarter");
-  const [selectedHandle, setSelectedHandle] = useState<NoteHandle | null>(null);
+  // Undo/redo + dirty tracking own the live document, the version counter, and
+  // commit. The document is still mutated in place; commit snapshots it.
+  const history = useHistory(createBlankDocument);
+  const { documentRef, version, commit } = history;
+  const [selection, setSelection] = useState<Selection>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const imageImport = useImageImport();
-
-  // Bump the version after every document mutation so the render recomputes.
-  const commit = useCallback(() => setVersion((v) => v + 1), []);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: version drives re-serialize after in-place mutations
   const musicxml = useMemo(
-    () => serializeDocument(documentRef.current as Document),
+    () => serializeDocument(documentRef.current),
     [version],
   );
+  const dirty = musicxml !== history.baselineXml;
   const score = useMemo(() => parseScore(musicxml), [musicxml]);
   const measureStartBeats = useMemo(
     () => computeMeasureStartBeats(score),
     [score],
   );
-
-  // The selection follows its note across edits via the (stable) handle; the
-  // renderer id is re-derived each render from the freshly parsed score.
-  const selectedId = selectedHandle ? idForHandle(score, selectedHandle) : null;
-  const noteHighlights: NoteHighlight[] = selectedId
-    ? [{ kind: "score", id: selectedId, color: SELECTION_COLOR }]
-    : [];
-
-  // Tracks an in-progress note drag (its current handle is updated as moveNote
-  // re-fits and rewrites the note on each pointer move).
-  const dragRef = useRef<{ handle: NoteHandle } | null>(null);
-
-  const handleGestureDown = useCallback(
-    (gesture: EditorGesture) => {
-      const doc = documentRef.current as Document;
-      if (gesture.hit) {
-        setSelectedHandle(gesture.hit.handle);
-        dragRef.current = { handle: gesture.hit.handle };
-        return;
-      }
-      // Empty staff: place a note of the selected duration.
-      const { measureIndex, onsetBeatInMeasure } = locateBeat(
-        gesture.beat,
-        measureStartBeats,
-      );
-      const handle = addNote(doc, {
-        measureIndex,
-        onsetBeatInMeasure,
-        durationBeats: beatsForDuration(selectedDuration),
-        pitch: gesture.pitch,
-      });
-      if (handle) {
-        setSelectedHandle(handle);
-      }
-      commit();
-    },
-    [commit, measureStartBeats, selectedDuration],
+  // Whether the loaded document is in the editor's supported single-staff shape.
+  // Multi-staff / multi-voice files are view-only: their notes carry no source
+  // provenance to select by, and the single-voice ops would corrupt them.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: version tracks the live document
+  const editable = useMemo(
+    () => isEditableDocument(documentRef.current),
+    [version],
   );
 
-  const handleGestureMove = useCallback(
+  // Selection highlights are re-derived from handles each render (ids change as
+  // notes are added/removed): the focused note draws strong, chord-mates light.
+  const noteHighlights: NoteHighlight[] = useMemo(() => {
+    if (!selection) {
+      return [];
+    }
+    if (selection.kind === "note") {
+      const id = idForHandle(score, selection.handle);
+      return id ? [{ kind: "score", id, color: FOCUS_COLOR }] : [];
+    }
+    return selection.chord.handles
+      .map((handle) => idForHandle(score, handle))
+      .filter((id): id is string => id !== null)
+      .map((id) => ({ kind: "score", id, color: CHORD_COLOR }));
+  }, [selection, score]);
+
+  const hasSelection = selection !== null;
+
+  // Tap on the staff: select the chord at that beat, then narrow to one note on
+  // a repeat tap. A tap on empty space clears the selection — it never inserts a
+  // note (clicking the staff used to add, which made stray clicks destructive).
+  const handleTap = useCallback(
     (gesture: EditorGesture) => {
-      const drag = dragRef.current;
-      if (!drag) {
+      setMenu(null);
+      // View-only documents: a tap must never select (there's no provenance to
+      // select by) or otherwise act.
+      if (!editable) {
         return;
       }
-      const doc = documentRef.current as Document;
-      const { measureIndex, onsetBeatInMeasure } = locateBeat(
-        gesture.beat,
-        measureStartBeats,
-      );
-      const handle = moveNote(doc, drag.handle, {
-        measureIndex,
-        onsetBeatInMeasure,
-        pitch: gesture.pitch,
-      });
-      if (handle) {
-        drag.handle = handle;
-        setSelectedHandle(handle);
-        commit();
+      if (!gesture.hit) {
+        setSelection(null);
+        return;
       }
+      const picked = gesture.hit.handle;
+      const chord = chordForHandle(score, picked);
+      if (!chord) {
+        setSelection({ kind: "note", handle: picked });
+        return;
+      }
+      setSelection((prev) => {
+        const alreadyHere =
+          (prev?.kind === "chord" && sameChord(prev.chord, chord)) ||
+          (prev?.kind === "note" &&
+            chord.handles.some((handle) => sameHandle(handle, prev.handle)));
+        return alreadyHere
+          ? { kind: "note", handle: picked }
+          : { kind: "chord", chord };
+      });
     },
-    [commit, measureStartBeats],
+    [editable, score],
   );
 
-  const handleGestureUp = useCallback(() => {
-    dragRef.current = null;
-  }, []);
+  // Right-click / long-press: select the chord at that beat (keeping a focused
+  // note if it belongs to that chord) and open the menu at the pointer.
+  const handleContextMenu = useCallback(
+    (request: ContextMenuRequest) => {
+      if (!editable) {
+        return;
+      }
+      const chord = chordAtBeat(score, request.beat);
+      if (!chord) {
+        setMenu(null);
+        return;
+      }
+      setSelection((prev) => {
+        if (
+          prev?.kind === "note" &&
+          chord.handles.some((handle) => sameHandle(handle, prev.handle))
+        ) {
+          return prev;
+        }
+        return { kind: "chord", chord };
+      });
+      setMenu({ x: request.clientX, y: request.clientY });
+    },
+    [editable, score],
+  );
 
-  const deleteSelected = useCallback(() => {
-    if (!selectedHandle) {
+  // Move the focused note by a diatonic step (pitch) or a beat (onset). Used by
+  // both the arrow keys and the context menu.
+  const nudge = useCallback(
+    (axis: "pitch" | "beat", delta: number) => {
+      const handle = focusedHandle(selection);
+      if (!handle) {
+        return;
+      }
+      const doc = documentRef.current;
+      const pitch = pitchForHandle(score, handle);
+      const chord = chordForHandle(score, handle);
+      if (!pitch || !chord) {
+        return;
+      }
+      const measureStart = measureStartBeats[handle.measureIndex] ?? 0;
+      const target =
+        axis === "pitch"
+          ? {
+              measureIndex: handle.measureIndex,
+              onsetBeatInMeasure: chord.onsetBeat - measureStart,
+              pitch: stepPitch(pitch, delta),
+            }
+          : (() => {
+              const newBeat = Math.max(0, chord.onsetBeat + delta * BEAT_STEP);
+              const loc = locateBeat(newBeat, measureStartBeats);
+              return { ...loc, pitch };
+            })();
+      const moved = moveNote(doc, handle, target);
+      if (moved) {
+        setSelection({ kind: "note", handle: moved });
+        // Coalesce a rapid run of nudges into one undo entry.
+        commit({ coalesce: "nudge" });
+      }
+    },
+    [commit, documentRef, measureStartBeats, score, selection],
+  );
+
+  const deleteSelection = useCallback(() => {
+    if (!selection) {
       return;
     }
-    removeNote(documentRef.current as Document, selectedHandle);
-    setSelectedHandle(null);
+    const handles =
+      selection.kind === "note" ? [selection.handle] : selection.chord.handles;
+    removeNotes(documentRef.current, handles);
+    setSelection(null);
+    setMenu(null);
     commit();
-  }, [commit, selectedHandle]);
+  }, [commit, documentRef, selection]);
 
-  // Delete / Backspace removes the selected note.
+  // Undo/redo also drop the selection + menu: the prior handles may no longer
+  // resolve against the restored document.
+  const undo = useCallback(() => {
+    history.undo();
+    setSelection(null);
+    setMenu(null);
+  }, [history]);
+
+  const redo = useCallback(() => {
+    history.redo();
+    setSelection(null);
+    setMenu(null);
+  }, [history]);
+
+  // Delete / Backspace removes the selection; arrow keys nudge a focused note;
+  // Ctrl/Cmd+Z undoes, Ctrl/Cmd+Shift+Z (or Ctrl+Y) redoes.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Delete" || event.key === "Backspace") {
+      const mod = event.metaKey || event.ctrlKey;
+      if (mod && (event.key === "z" || event.key === "Z")) {
         event.preventDefault();
-        deleteSelected();
+        if (event.shiftKey) {
+          redo();
+        } else {
+          undo();
+        }
+        return;
+      }
+      if (mod && (event.key === "y" || event.key === "Y")) {
+        event.preventDefault();
+        redo();
+        return;
+      }
+      switch (event.key) {
+        case "Delete":
+        case "Backspace":
+          event.preventDefault();
+          deleteSelection();
+          break;
+        case "ArrowUp":
+          event.preventDefault();
+          nudge("pitch", 1);
+          break;
+        case "ArrowDown":
+          event.preventDefault();
+          nudge("pitch", -1);
+          break;
+        case "ArrowLeft":
+          event.preventDefault();
+          nudge("beat", -1);
+          break;
+        case "ArrowRight":
+          event.preventDefault();
+          nudge("beat", 1);
+          break;
+        default:
+          break;
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [deleteSelected]);
+  }, [deleteSelection, nudge, undo, redo]);
 
   const onImport = useCallback(
     async (event: Event) => {
@@ -168,11 +330,12 @@ export function Editor() {
       if (musicxml === null) {
         return;
       }
-      documentRef.current = parseDocument(musicxml);
-      setSelectedHandle(null);
-      commit();
+      // A fresh load resets history and the dirty baseline to the import.
+      history.reset(parseDocument(musicxml));
+      setSelection(null);
+      setMenu(null);
     },
-    [commit, imageImport],
+    [history, imageImport],
   );
 
   const onExport = useCallback(() => {
@@ -183,7 +346,35 @@ export function Editor() {
     anchor.download = "score.musicxml";
     anchor.click();
     URL.revokeObjectURL(url);
-  }, [musicxml]);
+    // The on-disk file now matches the document: clear the dirty marker.
+    history.markSaved();
+  }, [history, musicxml]);
+
+  // Items depend on the selection: nudges need an unambiguous focused note.
+  const canNudge = focusedHandle(selection) !== null;
+  const menuItems: ContextMenuItem[] = [
+    {
+      label: "Move up",
+      onSelect: () => nudge("pitch", 1),
+      disabled: !canNudge,
+    },
+    {
+      label: "Move down",
+      onSelect: () => nudge("pitch", -1),
+      disabled: !canNudge,
+    },
+    {
+      label: "Move left",
+      onSelect: () => nudge("beat", -1),
+      disabled: !canNudge,
+    },
+    {
+      label: "Move right",
+      onSelect: () => nudge("beat", 1),
+      disabled: !canNudge,
+    },
+    { label: "Delete", onSelect: deleteSelection, disabled: !hasSelection },
+  ];
 
   return (
     <div
@@ -205,27 +396,54 @@ export function Editor() {
           flexWrap: "wrap",
         }}
       >
-        <DurationPalette
-          value={selectedDuration}
-          onChange={setSelectedDuration}
-        />
         <button
           type="button"
-          onClick={deleteSelected}
-          disabled={!selectedHandle}
-          style={{
-            padding: "6px 12px",
-            borderRadius: 6,
-            border: "1px solid #ccc",
-            background: "#fff",
-            color: selectedHandle ? "#333" : "#aaa",
-            cursor: selectedHandle ? "pointer" : "default",
-            fontSize: 14,
-          }}
+          onClick={undo}
+          disabled={!history.canUndo}
+          style={toolbarButtonStyle(history.canUndo)}
+        >
+          Undo
+        </button>
+        <button
+          type="button"
+          onClick={redo}
+          disabled={!history.canRedo}
+          style={toolbarButtonStyle(history.canRedo)}
+        >
+          Redo
+        </button>
+        <button
+          type="button"
+          onClick={deleteSelection}
+          disabled={!hasSelection}
+          style={toolbarButtonStyle(hasSelection)}
         >
           Delete
         </button>
         <span style={{ flex: 1 }} />
+        {dirty ? (
+          <span
+            aria-label="Unsaved changes"
+            title="Unsaved changes"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: 13,
+              color: "#8a6d3b",
+            }}
+          >
+            <span
+              style={{
+                width: 8,
+                height: 8,
+                borderRadius: "50%",
+                background: "#f59e0b",
+              }}
+            />
+            Unsaved
+          </span>
+        ) : null}
         <label
           style={{
             padding: "6px 12px",
@@ -270,15 +488,37 @@ export function Editor() {
           Import failed: {imageImport.error}
         </div>
       ) : null}
+      {!editable ? (
+        <div
+          style={{
+            fontSize: 13,
+            color: "#8a6d3b",
+            background: "#fff8e1",
+            border: "1px solid #f0e0a0",
+            borderRadius: 6,
+            padding: "6px 10px",
+          }}
+        >
+          This score uses multiple staves or voices, which the editor can't edit
+          yet — it's view-only. Editing tools are disabled.
+        </div>
+      ) : null}
       <div style={{ flex: 1, minHeight: 0 }}>
         <EditableSheetMusic
           musicxml={musicxml}
           noteHighlights={noteHighlights}
-          onGestureDown={handleGestureDown}
-          onGestureMove={handleGestureMove}
-          onGestureUp={handleGestureUp}
+          onTap={handleTap}
+          onContextMenu={handleContextMenu}
         />
       </div>
+      {menu && hasSelection ? (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={menuItems}
+          onClose={() => setMenu(null)}
+        />
+      ) : null}
     </div>
   );
 }

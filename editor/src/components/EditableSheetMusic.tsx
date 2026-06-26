@@ -3,14 +3,19 @@
 // into a musical `{ beat, pitch, hit }` (via hit-test) and reports it up to the
 // Editor, which owns the document and applies the dom-edit op. Visual feedback
 // is drawn through the renderer's existing `noteHighlights` prop.
+//
+// Interaction model (foundation milestone): a primary-button tap reports a
+// gesture (the Editor selects, or adds on empty staff); a plain drag is left
+// uncaptured so it falls through to the renderer's drag-to-scroll; a
+// right-click / long-press reports a context-menu request. Dragging never edits.
 
 import type { NoteHandle } from "../dom-edit";
 import { beatFromX, pickNote, pitchFromY } from "../hit-test";
 import {
   type NoteHighlight,
+  type Pitch,
   SheetMusicDisplay,
   type StagePointerInfo,
-  type Pitch,
 } from "../sheet-music/index";
 
 export interface EditorGesture {
@@ -20,6 +25,15 @@ export interface EditorGesture {
   pitch: Pitch;
   /** The note the pointer is over, if any (id for highlight, handle for edits). */
   hit: { id: string; handle: NoteHandle } | null;
+}
+
+/** A right-click / long-press request: a beat (and 1-indexed measure) plus the
+ *  viewport coordinates to anchor a context menu at. */
+export interface ContextMenuRequest {
+  measureNumber: number;
+  beat: number;
+  clientX: number;
+  clientY: number;
 }
 
 function resolveGesture(info: StagePointerInfo): EditorGesture {
@@ -44,31 +58,35 @@ function resolveGesture(info: StagePointerInfo): EditorGesture {
 export function EditableSheetMusic({
   musicxml,
   noteHighlights,
-  onGestureDown,
-  onGestureMove,
-  onGestureUp,
+  onTap,
+  onContextMenu,
 }: {
   musicxml: string;
   noteHighlights?: ReadonlyArray<NoteHighlight>;
-  onGestureDown?: (gesture: EditorGesture, event: PointerEvent) => void;
-  onGestureMove?: (gesture: EditorGesture, event: PointerEvent) => void;
-  onGestureUp?: (gesture: EditorGesture, event: PointerEvent) => void;
+  /** Primary-button tap on the staff (a non-drag). */
+  onTap?: (gesture: EditorGesture, event: PointerEvent) => void;
+  /** Right-click / long-press on the staff. */
+  onContextMenu?: (request: ContextMenuRequest) => void;
 }) {
   return (
     <SheetMusicDisplay
       musicxml={musicxml}
       noteHighlights={noteHighlights}
       textFontFamily="ui-sans-serif, system-ui, sans-serif"
-      containerStyle={{ touchAction: "none" }}
-      onStagePointerDown={(info, event) =>
-        onGestureDown?.(resolveGesture(info), event)
-      }
-      onStagePointerMove={(info, event) =>
-        onGestureMove?.(resolveGesture(info), event)
-      }
-      onStagePointerUp={(info, event) =>
-        onGestureUp?.(resolveGesture(info), event)
-      }
+      // Allow horizontal pan: a plain drag scrolls rather than edits.
+      containerStyle={{ touchAction: "pan-x" }}
+      // Leave the pointer uncaptured so a drag reaches the container's
+      // drag-to-scroll; we only act on the (primary-button) down as a tap.
+      captureStagePointer={false}
+      onStagePointerDown={(info, event) => {
+        // Ignore non-primary buttons here — right-click is handled by the
+        // context-menu seam, which also fires its own pointerdown.
+        if (event.button !== 0) {
+          return;
+        }
+        onTap?.(resolveGesture(info), event);
+      }}
+      onSheetContextMenu={onContextMenu}
     />
   );
 }

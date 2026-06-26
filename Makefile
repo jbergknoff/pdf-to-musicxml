@@ -42,9 +42,10 @@ typecheck: node_modules
 	$(tsc) --noEmit
 
 # Editor tests plus the OMR pipeline's lib/src tests. Scoped to those trees so
-# `bun test` does not pick up lib/import-image/tests/ (Playwright integration).
+# `bun test` does not pick up the Playwright integration specs (editor/tests/
+# and lib/import-image/tests/), which only run under Playwright.
 unit-test: node_modules
-	$(bun) test editor lib/import-image/lib lib/import-image/src
+	$(bun) test editor/src lib/import-image/lib lib/import-image/src
 
 # Build the editor SPA (+ the bundled OMR worker and its ORT/pdf.js assets) into
 # editor/dist. This is the Netlify build target (see netlify.toml).
@@ -92,6 +93,15 @@ upload-models: node_modules
 # Not part of pr-ready: it needs the Playwright browser image.
 integration-test: build node_modules
 	$(playwright) test --config lib/import-image/playwright.config.ts
+
+# Browser integration tests for the editor's editing flows (select / add /
+# delete / undo / view-only). Builds the editor, then drives the served
+# editor/dist with Playwright in the pinned browser image (the `server` +
+# `playwright` compose services; BASE_URL=http://server:3456 so the config uses
+# the running server rather than starting its own). Not in pr-ready: needs the
+# Playwright browser image.
+editor-integration-test: build node_modules
+	$(playwright) test --config playwright.editor.config.ts $(ARGS)
 
 # End-to-end OMR integration tests: run the real recognition pipeline in Node
 # (onnxruntime-node, CPU) over the musicxml.com fixture images and assert both
