@@ -11,6 +11,8 @@
   },
   "include": [
     "editor",
+    "lib/mxl.ts",
+    "lib/midi-to-musicxml.ts",
     "lib/import-image/index.ts",
     "lib/import-image/src",
     "lib/import-image/lib",

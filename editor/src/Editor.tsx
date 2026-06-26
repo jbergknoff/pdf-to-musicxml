@@ -38,8 +38,28 @@ import {
   type NoteHighlight,
   parseScore,
 } from "./sheet-music/index";
+import { parseMidi } from "midi-file";
+import { extractMusicXmlFromMxl } from "../../lib/mxl";
+import {
+  getMidiTracks,
+  midiToMusicXmlWithTracks,
+} from "../../lib/midi-to-musicxml";
 import { useHistory } from "./use-history";
 import { isImportableImage, useImageImport } from "./use-image-import";
+
+function isMxl(file: File): boolean {
+  return file.name.toLowerCase().endsWith(".mxl");
+}
+
+function isMidi(file: File): boolean {
+  const name = file.name.toLowerCase();
+  return (
+    name.endsWith(".mid") ||
+    name.endsWith(".midi") ||
+    file.type === "audio/midi" ||
+    file.type === "audio/x-midi"
+  );
+}
 
 // A focused single note draws stronger than the rest of its selected chord.
 const FOCUS_COLOR = "#1976d2";
@@ -322,11 +342,22 @@ export function Editor() {
       if (!file) {
         return;
       }
-      // PDFs and raster images go through the OMR pipeline; MusicXML is parsed
-      // directly. The recovered MusicXML loads into the editor either way.
-      const musicxml = isImportableImage(file)
-        ? await imageImport.importImage(file)
-        : await file.text();
+      // Route by file type: images/PDFs through OMR, .mxl via ZIP extraction,
+      // MIDI via conversion, and MusicXML/.xml read as plain text.
+      let musicxml: string | null;
+      if (isImportableImage(file)) {
+        musicxml = await imageImport.importImage(file);
+      } else if (isMxl(file)) {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        musicxml = await extractMusicXmlFromMxl(bytes);
+      } else if (isMidi(file)) {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const parsed = parseMidi(bytes);
+        const trackIndices = getMidiTracks(parsed).map((t) => t.index);
+        musicxml = midiToMusicXmlWithTracks(parsed, trackIndices);
+      } else {
+        musicxml = await file.text();
+      }
       if (musicxml === null) {
         return;
       }
@@ -458,7 +489,7 @@ export function Editor() {
           Import
           <input
             type="file"
-            accept=".musicxml,.xml,.pdf,image/*"
+            accept=".musicxml,.xml,.mxl,.mid,.midi,audio/midi,.pdf,image/*"
             onChange={onImport}
             disabled={imageImport.busy}
             style={{ display: "none" }}

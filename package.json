@@ -4,6 +4,7 @@
   "type": "module",
   "workspaces": ["editor"],
   "dependencies": {
+    "midi-file": "^1.2.4",
     "onnxruntime-web": "^1.20.0",
     "opensheetmusicdisplay": "^1.9.0",
     "pdfjs-dist": "^4.0.0",
