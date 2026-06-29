@@ -60,6 +60,11 @@ export function EditableSheetMusic({
   noteHighlights,
   onTap,
   onContextMenu,
+  accentColor,
+  textFontFamily = "'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif",
+  getLiveBeat,
+  isPlaying,
+  scrollLocked,
 }: {
   musicxml: string;
   noteHighlights?: ReadonlyArray<NoteHighlight>;
@@ -67,14 +72,28 @@ export function EditableSheetMusic({
   onTap?: (gesture: EditorGesture, event: PointerEvent) => void;
   /** Right-click / long-press on the staff. */
   onContextMenu?: (request: ContextMenuRequest) => void;
+  /** Accent color for the playback cursor (and any selection chrome). */
+  accentColor?: string;
+  /** Font family for measure numbers. */
+  textFontFamily?: string;
+  /** Playback cursor beat source (drives the on-score cursor + scroll-follow). */
+  getLiveBeat?: () => number | null;
+  /** Whether playback is active (runs the cursor rAF loop). */
+  isPlaying?: boolean;
+  /** Disable user scroll while playing. */
+  scrollLocked?: boolean;
 }) {
   return (
     <SheetMusicDisplay
       musicxml={musicxml}
       noteHighlights={noteHighlights}
-      textFontFamily="ui-sans-serif, system-ui, sans-serif"
+      accentColor={accentColor}
+      textFontFamily={textFontFamily}
+      getLiveBeat={getLiveBeat}
+      isPlaying={isPlaying}
+      scrollLocked={scrollLocked}
       // Allow horizontal pan: a plain drag scrolls rather than edits.
-      containerStyle={{ touchAction: "pan-x" }}
+      containerStyle={{ touchAction: "pan-x", height: "100%" }}
       // Leave the pointer uncaptured so a drag reaches the container's
       // drag-to-scroll; we only act on the (primary-button) down as a tap.
       captureStagePointer={false}

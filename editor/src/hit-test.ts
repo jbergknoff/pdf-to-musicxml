@@ -10,6 +10,7 @@ import {
   computeMeasureStartBeats,
   diatonicIndex,
   isRest,
+  type NoteType,
   type ParsedScore,
   type Pitch,
   type ResolvedLayout,
@@ -279,11 +280,123 @@ export function pitchForHandle(
 }
 
 // Shift a pitch by a number of diatonic steps (±1 = one staff position). The
-// result is natural (`alter: 0`), matching the editor's no-accidental scope
-// (`pitchFromY` likewise infers no accidentals).
+// result is natural (`alter: 0`), matching the spec's "↑/↓ steps diatonically
+// and resets the accidental to natural" (`pitchFromY` likewise infers none).
 export function stepPitch(pitch: Pitch, deltaSteps: number): Pitch {
   const index = diatonicIndex(pitch) + deltaSteps;
   const octave = Math.floor(index / 7);
   const stepIndex = ((index % 7) + 7) % 7;
   return { step: STEPS[stepIndex], alter: 0, octave };
+}
+
+// Shift a pitch by whole octaves, preserving its step and accidental (used by
+// Shift+↑/↓). Unlike `stepPitch` this keeps any alteration.
+export function octavePitch(pitch: Pitch, deltaOctaves: number): Pitch {
+  return { ...pitch, octave: pitch.octave + deltaOctaves };
+}
+
+// ── Rich chord info (for the inspector) ───────────────────────────────────────
+
+// One note of a chord, with everything the inspector and overlay need: the
+// renderer id (highlight), the source handle (edit), and the pitch (label +
+// ordering).
+export interface ChordNote {
+  id: string;
+  handle: NoteHandle;
+  pitch: Pitch;
+}
+
+// A selectable beat with its note rows and duration type — the inspector's data
+// model. Mirrors `pickableChords` but carries per-note id/pitch and the chord's
+// `NoteType`.
+export interface ChordInfo {
+  measureIndex: number;
+  onsetBeat: number;
+  type: NoteType;
+  notes: ChordNote[];
+}
+
+function pickableChordInfos(score: ParsedScore): ChordInfo[] {
+  const measureStartBeats = computeMeasureStartBeats(score);
+  const result: ChordInfo[] = [];
+  score.parts.forEach((part, partIndex) => {
+    part.measures.forEach((measure, measureIndex) => {
+      let beatCursor = measureStartBeats[measureIndex] ?? 0;
+      const divisions = measure.divisions || 4;
+      for (const event of measure.events) {
+        if (isRest(event)) {
+          beatCursor += event.duration / divisions;
+          continue;
+        }
+        const group = event as ChordGroup;
+        const notes: ChordNote[] = [];
+        group.notes.forEach((note, voiceIndex) => {
+          if (!note.source) {
+            return;
+          }
+          notes.push({
+            id: `p${partIndex}-m${measure.number}-n${group.noteIndex}-v${voiceIndex}`,
+            handle: note.source,
+            pitch: note.pitch,
+          });
+        });
+        if (notes.length > 0) {
+          result.push({
+            measureIndex,
+            onsetBeat: beatCursor,
+            type: group.type,
+            notes,
+          });
+        }
+        beatCursor += group.duration / divisions;
+      }
+    });
+  });
+  return result;
+}
+
+// Every selectable beat in onset order — used for ←/→ beat navigation.
+export function chordInfos(score: ParsedScore): ChordInfo[] {
+  return pickableChordInfos(score);
+}
+
+// The rich chord info for the beat a known note belongs to, or null if the
+// handle no longer resolves.
+export function chordInfoForHandle(
+  score: ParsedScore,
+  handle: NoteHandle,
+): ChordInfo | null {
+  for (const info of pickableChordInfos(score)) {
+    if (info.notes.some((note) => sameHandle(note.handle, handle))) {
+      return info;
+    }
+  }
+  return null;
+}
+
+// The rich chord info nearest `beat`, within `tolerance` quarter-note beats.
+export function chordInfoAtBeat(
+  score: ParsedScore,
+  beat: number,
+  tolerance = 1.5,
+): ChordInfo | null {
+  let best: ChordInfo | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const info of pickableChordInfos(score)) {
+    const distance = Math.abs(info.onsetBeat - beat);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = info;
+    }
+  }
+  return best && bestDistance <= tolerance ? best : null;
+}
+
+// Top-first (descending pitch) ordering of a chord's notes — the single helper
+// the inspector rows and any note-cycling must share so list order and on-score
+// positions stay aligned (per the handoff's State Management note).
+export function topFirstNotes(info: ChordInfo): ChordNote[] {
+  return [...info.notes].sort(
+    (a, b) => diatonicIndex(b.pitch) - diatonicIndex(a.pitch),
+  );
 }

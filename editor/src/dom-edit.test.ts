@@ -3,7 +3,9 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
 import {
   addNote,
+  addNoteToChord,
   createBlankDocument,
+  insertMeasure,
   isEditableDocument,
   moveNote,
   type NoteHandle,
@@ -11,6 +13,7 @@ import {
   removeNote,
   removeNotes,
   serializeDocument,
+  setAccidental,
 } from "./dom-edit";
 import {
   type ChordGroup,
@@ -345,6 +348,111 @@ describe("round-trip", () => {
     expect(sliceMeasure(after, 5)).toBe(measure5Before);
     // The edit did land somewhere: the whole document is not byte-identical.
     expect(after).not.toBe(before);
+  });
+});
+
+describe("addNoteToChord", () => {
+  test("stacks a chord member at the same beat, default a third above", () => {
+    const doc = createBlankDocument();
+    const base = addNote(doc, {
+      measureIndex: 0,
+      onsetBeatInMeasure: 0,
+      durationBeats: 1,
+      pitch: { step: "C", alter: 0, octave: 5 },
+    }) as NoteHandle;
+    const added = addNoteToChord(doc, base);
+    expect(added).not.toBeNull();
+
+    const placed = chords(reparse(doc));
+    // Still one beat (one chord) at onset 0…
+    expect(placed.length).toBe(1);
+    expect(placed[0].onsetBeat).toBe(0);
+    // …now with two stacked notes, ordered low-to-high (C5 then a third up, E5).
+    const pitches = placed[0].chord.notes.map((n) => n.pitch);
+    expect(pitches).toEqual([
+      { step: "C", alter: 0, octave: 5 },
+      { step: "E", alter: 0, octave: 5 },
+    ]);
+    // The second member carries the <chord/> flag; the first does not.
+    expect(placed[0].chord.notes[1].isChordMember).toBe(true);
+    expect(placed[0].chord.notes[0].isChordMember).toBe(false);
+  });
+
+  test("honors an explicit pitch and round-trips a three-note chord", () => {
+    const doc = createBlankDocument();
+    const base = addNote(doc, {
+      measureIndex: 0,
+      onsetBeatInMeasure: 0,
+      durationBeats: 1,
+      pitch: { step: "C", alter: 0, octave: 5 },
+    }) as NoteHandle;
+    addNoteToChord(doc, base, { step: "E", alter: 0, octave: 5 });
+    addNoteToChord(doc, base, { step: "G", alter: 0, octave: 5 });
+
+    const placed = chords(reparse(doc));
+    expect(placed.length).toBe(1);
+    expect(placed[0].chord.notes.map((n) => n.pitch.step)).toEqual([
+      "C",
+      "E",
+      "G",
+    ]);
+  });
+});
+
+describe("setAccidental", () => {
+  test("applies, then clears, a sharp on a note", () => {
+    const doc = createBlankDocument();
+    const handle = addNote(doc, {
+      measureIndex: 0,
+      onsetBeatInMeasure: 0,
+      durationBeats: 1,
+      pitch: { step: "F", alter: 0, octave: 5 },
+    }) as NoteHandle;
+
+    expect(setAccidental(doc, handle, 1)).toBe(true);
+    let note = chords(reparse(doc))[0].chord.notes[0];
+    expect(note.pitch.alter).toBe(1);
+    expect(note.accidental).toBe("sharp");
+
+    // Natural drops the <alter> back to a plain F (no printed accidental in C).
+    expect(setAccidental(doc, handle, 0)).toBe(true);
+    note = chords(reparse(doc))[0].chord.notes[0];
+    expect(note.pitch.alter).toBe(0);
+    expect(note.accidental).toBe("none");
+  });
+});
+
+describe("insertMeasure", () => {
+  test("appends a blank measure and renumbers sequentially", () => {
+    const doc = createBlankDocument({ measureCount: 2 });
+    const newIndex = insertMeasure(doc);
+    expect(newIndex).toBe(2);
+
+    const score = reparse(doc);
+    expect(score.parts[0].measures.length).toBe(3);
+    expect(score.parts[0].measures.map((m) => m.number)).toEqual([1, 2, 3]);
+    // The new (last) measure is a single full-measure rest.
+    const last = score.parts[0].measures[2];
+    expect(last.events.length).toBe(1);
+    expect(isRest(last.events[0])).toBe(true);
+  });
+
+  test("inserts in the middle and shifts later measures down", () => {
+    const doc = createBlankDocument({ measureCount: 2 });
+    // A note in measure 2 (index 1) so we can prove it moved to measure 3.
+    addNote(doc, {
+      measureIndex: 1,
+      onsetBeatInMeasure: 0,
+      durationBeats: 1,
+      pitch: { step: "C", alter: 0, octave: 5 },
+    });
+    insertMeasure(doc, 0); // after measure index 0
+
+    const placed = chords(reparse(doc));
+    expect(reparse(doc).parts[0].measures.length).toBe(3);
+    // The note that was in measure index 1 is now in measure index 2.
+    expect(placed.length).toBe(1);
+    expect(placed[0].measureIndex).toBe(2);
   });
 });
 

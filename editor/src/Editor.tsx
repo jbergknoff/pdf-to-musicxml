@@ -1,12 +1,15 @@
-// Editor shell: owns the live MusicXML Document, the duration palette, the
-// selection, and import/export. The Document is the source of truth (held in a
-// ref); a `version` counter forces a re-render after each in-place mutation, and
-// the serialized string is recomputed from it.
+// Editor shell: owns the live MusicXML Document, the selection, import/export,
+// and playback. The Document is the source of truth (held in a ref); a `version`
+// counter forces a re-render after each in-place mutation, and the serialized
+// string is recomputed from it.
 //
-// Interaction is click-to-select, not drag-to-edit: a tap selects the chord at
-// a beat, a second tap (or a tap on a note already in the selected chord)
-// narrows to one note, a right-click / long-press opens a context menu, and the
-// arrow keys nudge a focused note. A plain drag only scrolls the staff.
+// Interaction is selection-first and keyboard-driven (per the Claude Design
+// handoff): a click selects the whole chord at a beat (Level 1); a second click
+// on a notehead — or Enter — drills to a single note (Level 2); Esc steps back
+// out. The right-hand inspector mirrors the selection and edits pitch /
+// accidental / chord membership with discrete commands. Arrow keys re-pitch the
+// drilled note (↑/↓) or move between beats (←/→); A–G add a note; -/=/0 set
+// accidentals; Space plays/stops. A plain drag only scrolls the staff.
 
 import { useCallback, useEffect, useMemo, useState } from "preact/hooks";
 import { ContextMenu, type ContextMenuItem } from "./components/ContextMenu";
@@ -15,27 +18,36 @@ import {
   EditableSheetMusic,
   type EditorGesture,
 } from "./components/EditableSheetMusic";
+import { Inspector, type InspectorModel } from "./components/Inspector";
 import {
+  addNoteToChord,
   createBlankDocument,
+  insertMeasure,
   isEditableDocument,
   moveNote,
   type NoteHandle,
   parseDocument,
   removeNotes,
   serializeDocument,
+  setAccidental,
 } from "./dom-edit";
 import {
   chordAtBeat,
   type ChordSelection,
   chordForHandle,
+  type ChordInfo,
+  chordInfoForHandle,
+  chordInfos,
   idForHandle,
-  locateBeat,
+  octavePitch,
   pitchForHandle,
   stepPitch,
+  topFirstNotes,
 } from "./hit-test";
 import {
   computeMeasureStartBeats,
   type NoteHighlight,
+  type Pitch,
   parseScore,
 } from "./sheet-music/index";
 import { parseMidi } from "midi-file";
@@ -44,8 +56,10 @@ import {
   getMidiTracks,
   midiToMusicXmlWithTracks,
 } from "../../lib/midi-to-musicxml";
+import { COLORS, FONTS, LAYOUT, RADIUS } from "./theme";
 import { useHistory } from "./use-history";
 import { isImportableImage, useImageImport } from "./use-image-import";
+import { useListen } from "./use-listen";
 
 function isMxl(file: File): boolean {
   return file.name.toLowerCase().endsWith(".mxl");
@@ -61,14 +75,12 @@ function isMidi(file: File): boolean {
   );
 }
 
-// A focused single note draws stronger than the rest of its selected chord.
-const FOCUS_COLOR = "#1976d2";
-const CHORD_COLOR = "#90caf9";
-// Arrow-key (and context-menu) horizontal nudge, in quarter-note beats.
-const BEAT_STEP = 1;
+// A focused note draws solid accent; its chord-mates draw a lighter tint.
+const FOCUS_COLOR = COLORS.accent;
+const CHORD_TINT = "#84a9e8";
 
-// The current selection: either a whole chord (every note at one beat) or one
-// focused note. Both follow their notes across edits via the stable handles.
+// The current selection: either a whole chord (Level 1) or one focused note
+// (Level 2). Both follow their notes across edits via the stable handles.
 type Selection =
   | { kind: "chord"; chord: ChordSelection }
   | { kind: "note"; handle: NoteHandle }
@@ -81,26 +93,8 @@ function sameHandle(a: NoteHandle, b: NoteHandle): boolean {
   );
 }
 
-function sameChord(a: ChordSelection, b: ChordSelection): boolean {
-  return a.measureIndex === b.measureIndex && a.onsetBeat === b.onsetBeat;
-}
-
-// Shared style for the plain toolbar buttons (Undo/Redo/Delete), dimmed when
-// disabled.
-function toolbarButtonStyle(enabled: boolean) {
-  return {
-    padding: "6px 12px",
-    borderRadius: 6,
-    border: "1px solid #ccc",
-    background: "#fff",
-    color: enabled ? "#333" : "#aaa",
-    cursor: enabled ? "pointer" : "default",
-    fontSize: 14,
-  } as const;
-}
-
-// The single note edits (nudge) act on: an explicitly focused note, or a chord
-// that holds exactly one note. A multi-note chord has no unambiguous target.
+// The single-note target for nudges/accidentals: an explicitly focused note, or
+// a chord that holds exactly one note.
 function focusedHandle(selection: Selection): NoteHandle | null {
   if (!selection) {
     return null;
@@ -111,6 +105,41 @@ function focusedHandle(selection: Selection): NoteHandle | null {
   return selection.chord.handles.length === 1
     ? selection.chord.handles[0]
     : null;
+}
+
+// A pitch's display accidental for the inspector label.
+function accidentalSymbol(alter: number): string {
+  if (alter >= 2) {
+    return "♯♯";
+  }
+  if (alter === 1) {
+    return "♯";
+  }
+  if (alter === -1) {
+    return "♭";
+  }
+  if (alter <= -2) {
+    return "♭♭";
+  }
+  return "";
+}
+
+function pitchLabel(pitch: Pitch): string {
+  return `${pitch.step}${accidentalSymbol(pitch.alter)}${pitch.octave}`;
+}
+
+// Shared style for the plain toolbar buttons, dimmed when disabled.
+function toolbarButtonStyle(enabled: boolean) {
+  return {
+    padding: "6px 12px",
+    borderRadius: RADIUS.button,
+    border: `1px solid ${COLORS.borderButton}`,
+    background: COLORS.canvas,
+    color: enabled ? COLORS.textPrimary : COLORS.textPlaceholder,
+    cursor: enabled ? "pointer" : "default",
+    fontSize: 13,
+    fontFamily: FONTS.ui,
+  } as const;
 }
 
 export function Editor() {
@@ -134,40 +163,95 @@ export function Editor() {
     [score],
   );
   // Whether the loaded document is in the editor's supported single-staff shape.
-  // Multi-staff / multi-voice files are view-only: their notes carry no source
-  // provenance to select by, and the single-voice ops would corrupt them.
+  // Multi-staff / multi-voice files are view-only.
   // biome-ignore lint/correctness/useExhaustiveDependencies: version tracks the live document
   const editable = useMemo(
     () => isEditableDocument(documentRef.current),
     [version],
   );
 
-  // Selection highlights are re-derived from handles each render (ids change as
-  // notes are added/removed): the focused note draws strong, chord-mates light.
+  const listen = useListen(score);
+
+  // The rich chord info for the current selection (notes + duration type).
+  const chordInfo: ChordInfo | null = useMemo(() => {
+    if (!selection) {
+      return null;
+    }
+    const handle =
+      selection.kind === "note" ? selection.handle : selection.chord.handles[0];
+    return handle ? chordInfoForHandle(score, handle) : null;
+  }, [selection, score]);
+
+  // The inspector model + the parallel top-first handle list it indexes into.
+  const inspector = useMemo<{
+    model: InspectorModel;
+    handles: NoteHandle[];
+  } | null>(() => {
+    if (!chordInfo) {
+      return null;
+    }
+    const rows = topFirstNotes(chordInfo);
+    const focused = focusedHandle(selection);
+    const measureStart = measureStartBeats[chordInfo.measureIndex] ?? 0;
+    const beatType = score.parts[0]?.timeSig?.beatType ?? 4;
+    const beatNumber =
+      Math.round((chordInfo.onsetBeat - measureStart) * (beatType / 4)) + 1;
+    return {
+      model: {
+        level: selection?.kind === "note" ? "note" : "beat",
+        measureNumber: chordInfo.measureIndex + 1,
+        beatNumber,
+        durationLabel: chordInfo.type,
+        notes: rows.map((row) => ({
+          key: row.id,
+          label: pitchLabel(row.pitch),
+          alter: row.pitch.alter,
+          focused: focused ? sameHandle(row.handle, focused) : false,
+        })),
+      },
+      handles: rows.map((row) => row.handle),
+    };
+  }, [chordInfo, selection, score, measureStartBeats]);
+
+  // Selection highlights: the focused note draws strong, chord-mates light.
   const noteHighlights: NoteHighlight[] = useMemo(() => {
     if (!selection) {
       return [];
     }
     if (selection.kind === "note") {
+      if (chordInfo) {
+        const out: NoteHighlight[] = [];
+        for (const note of chordInfo.notes) {
+          const id = idForHandle(score, note.handle);
+          if (id) {
+            out.push({
+              kind: "score",
+              id,
+              color: sameHandle(note.handle, selection.handle)
+                ? FOCUS_COLOR
+                : CHORD_TINT,
+            });
+          }
+        }
+        return out;
+      }
       const id = idForHandle(score, selection.handle);
       return id ? [{ kind: "score", id, color: FOCUS_COLOR }] : [];
     }
     return selection.chord.handles
       .map((handle) => idForHandle(score, handle))
       .filter((id): id is string => id !== null)
-      .map((id) => ({ kind: "score", id, color: CHORD_COLOR }));
-  }, [selection, score]);
+      .map((id) => ({ kind: "score", id, color: CHORD_TINT }));
+  }, [selection, score, chordInfo]);
 
   const hasSelection = selection !== null;
 
   // Tap on the staff: select the chord at that beat, then narrow to one note on
-  // a repeat tap. A tap on empty space clears the selection — it never inserts a
-  // note (clicking the staff used to add, which made stray clicks destructive).
+  // a repeat tap (or a direct notehead tap). A tap on empty space clears the
+  // selection — it never inserts a note.
   const handleTap = useCallback(
     (gesture: EditorGesture) => {
       setMenu(null);
-      // View-only documents: a tap must never select (there's no provenance to
-      // select by) or otherwise act.
       if (!editable) {
         return;
       }
@@ -183,7 +267,9 @@ export function Editor() {
       }
       setSelection((prev) => {
         const alreadyHere =
-          (prev?.kind === "chord" && sameChord(prev.chord, chord)) ||
+          (prev?.kind === "chord" &&
+            prev.chord.measureIndex === chord.measureIndex &&
+            prev.chord.onsetBeat === chord.onsetBeat) ||
           (prev?.kind === "note" &&
             chord.handles.some((handle) => sameHandle(handle, prev.handle)));
         return alreadyHere
@@ -194,8 +280,6 @@ export function Editor() {
     [editable, score],
   );
 
-  // Right-click / long-press: select the chord at that beat (keeping a focused
-  // note if it belongs to that chord) and open the menu at the pointer.
   const handleContextMenu = useCallback(
     (request: ContextMenuRequest) => {
       if (!editable) {
@@ -220,42 +304,98 @@ export function Editor() {
     [editable, score],
   );
 
-  // Move the focused note by a diatonic step (pitch) or a beat (onset). Used by
-  // both the arrow keys and the context menu.
-  const nudge = useCallback(
-    (axis: "pitch" | "beat", delta: number) => {
-      const handle = focusedHandle(selection);
-      if (!handle) {
+  // ── Editing operations ──────────────────────────────────────────────────────
+
+  // Staff-step (or octave-step) a specific note, keeping its onset. Returns to
+  // Level 2 on the moved note and coalesces a rapid run into one undo entry.
+  const stepHandle = useCallback(
+    (handle: NoteHandle, delta: number, octave: boolean) => {
+      if (!editable) {
         return;
       }
-      const doc = documentRef.current;
       const pitch = pitchForHandle(score, handle);
       const chord = chordForHandle(score, handle);
       if (!pitch || !chord) {
         return;
       }
-      const measureStart = measureStartBeats[handle.measureIndex] ?? 0;
-      const target =
-        axis === "pitch"
-          ? {
-              measureIndex: handle.measureIndex,
-              onsetBeatInMeasure: chord.onsetBeat - measureStart,
-              pitch: stepPitch(pitch, delta),
-            }
-          : (() => {
-              const newBeat = Math.max(0, chord.onsetBeat + delta * BEAT_STEP);
-              const loc = locateBeat(newBeat, measureStartBeats);
-              return { ...loc, pitch };
-            })();
-      const moved = moveNote(doc, handle, target);
+      const measureStart = measureStartBeats[chord.measureIndex] ?? 0;
+      const moved = moveNote(documentRef.current, handle, {
+        measureIndex: chord.measureIndex,
+        onsetBeatInMeasure: chord.onsetBeat - measureStart,
+        pitch: octave ? octavePitch(pitch, delta) : stepPitch(pitch, delta),
+      });
       if (moved) {
         setSelection({ kind: "note", handle: moved });
-        // Coalesce a rapid run of nudges into one undo entry.
         commit({ coalesce: "nudge" });
       }
     },
-    [commit, documentRef, measureStartBeats, score, selection],
+    [editable, score, measureStartBeats, documentRef, commit],
   );
+
+  const setAccidentalOn = useCallback(
+    (handle: NoteHandle, alter: number) => {
+      if (!editable) {
+        return;
+      }
+      if (setAccidental(documentRef.current, handle, alter)) {
+        setSelection({ kind: "note", handle });
+        commit();
+      }
+    },
+    [editable, documentRef, commit],
+  );
+
+  const removeHandle = useCallback(
+    (handle: NoteHandle) => {
+      if (!editable) {
+        return;
+      }
+      removeNotes(documentRef.current, [handle]);
+      setSelection(null);
+      setMenu(null);
+      commit();
+    },
+    [editable, documentRef, commit],
+  );
+
+  const addNoteToCurrent = useCallback(
+    (pitch?: Pitch) => {
+      if (!editable || !chordInfo) {
+        return;
+      }
+      const added = addNoteToChord(
+        documentRef.current,
+        chordInfo.notes[0].handle,
+        pitch,
+      );
+      if (added) {
+        setSelection({ kind: "note", handle: added });
+        commit();
+      }
+    },
+    [editable, chordInfo, documentRef, commit],
+  );
+
+  const addLetter = useCallback(
+    (step: Pitch["step"]) => {
+      if (!chordInfo) {
+        return;
+      }
+      const top = topFirstNotes(chordInfo)[0].pitch;
+      addNoteToCurrent({ step, alter: 0, octave: top.octave });
+    },
+    [chordInfo, addNoteToCurrent],
+  );
+
+  const onInsertMeasure = useCallback(() => {
+    if (!editable) {
+      return;
+    }
+    insertMeasure(documentRef.current, chordInfo?.measureIndex);
+    setSelection(null);
+    setMenu(null);
+    commit();
+  }, [editable, chordInfo, documentRef, commit]);
 
   const deleteSelection = useCallback(() => {
     if (!selection) {
@@ -269,8 +409,129 @@ export function Editor() {
     commit();
   }, [commit, documentRef, selection]);
 
-  // Undo/redo also drop the selection + menu: the prior handles may no longer
-  // resolve against the restored document.
+  // ── Selection navigation (keyboard) ─────────────────────────────────────────
+
+  const drillIn = useCallback(() => {
+    setSelection((prev) => {
+      if (prev?.kind !== "chord") {
+        return prev;
+      }
+      const info = chordInfoForHandle(score, prev.chord.handles[0]);
+      return info
+        ? { kind: "note", handle: topFirstNotes(info)[0].handle }
+        : prev;
+    });
+  }, [score]);
+
+  const stepOut = useCallback(() => {
+    setMenu(null);
+    setSelection((prev) => {
+      if (prev?.kind !== "note") {
+        return null;
+      }
+      const info = chordInfoForHandle(score, prev.handle);
+      return info
+        ? {
+            kind: "chord",
+            chord: {
+              measureIndex: info.measureIndex,
+              onsetBeat: info.onsetBeat,
+              handles: info.notes.map((note) => note.handle),
+            },
+          }
+        : null;
+    });
+  }, [score]);
+
+  const cycleChord = useCallback(
+    (dir: number) => {
+      setSelection((prev) => {
+        if (prev?.kind !== "note") {
+          return prev;
+        }
+        const info = chordInfoForHandle(score, prev.handle);
+        if (!info) {
+          return prev;
+        }
+        const rows = topFirstNotes(info);
+        const index = rows.findIndex((row) =>
+          sameHandle(row.handle, prev.handle),
+        );
+        if (index < 0) {
+          return prev;
+        }
+        const next =
+          (((index + dir) % rows.length) + rows.length) % rows.length;
+        return { kind: "note", handle: rows[next].handle };
+      });
+    },
+    [score],
+  );
+
+  const navBeat = useCallback(
+    (dir: number) => {
+      const list = chordInfos(score);
+      if (list.length === 0) {
+        return;
+      }
+      setSelection((prev) => {
+        let index: number;
+        if (!prev) {
+          index = dir > 0 ? 0 : list.length - 1;
+        } else {
+          const handle =
+            prev.kind === "note" ? prev.handle : prev.chord.handles[0];
+          const current = list.findIndex((info) =>
+            info.notes.some((note) => sameHandle(note.handle, handle)),
+          );
+          index = current < 0 ? (dir > 0 ? 0 : list.length - 1) : current + dir;
+        }
+        if (index < 0 || index >= list.length) {
+          return prev; // clamp at the ends
+        }
+        const next = list[index];
+        if (prev?.kind === "note") {
+          return { kind: "note", handle: topFirstNotes(next)[0].handle };
+        }
+        return {
+          kind: "chord",
+          chord: {
+            measureIndex: next.measureIndex,
+            onsetBeat: next.onsetBeat,
+            handles: next.notes.map((note) => note.handle),
+          },
+        };
+      });
+    },
+    [score],
+  );
+
+  // ↑/↓: at Level 2 step the note (Shift = octave); at Level <2 drill in.
+  const arrowPitch = useCallback(
+    (dir: number, shift: boolean) => {
+      if (selection?.kind === "note") {
+        stepHandle(selection.handle, dir, shift);
+      } else {
+        drillIn();
+      }
+    },
+    [selection, stepHandle, drillIn],
+  );
+
+  const accidentalOnFocus = useCallback(
+    (alter: number) => {
+      const handle = focusedHandle(selection);
+      if (handle) {
+        setAccidentalOn(handle, alter);
+      }
+    },
+    [selection, setAccidentalOn],
+  );
+
+  const onListen = useCallback(() => {
+    listen.toggle(chordInfo?.onsetBeat);
+  }, [listen, chordInfo]);
+
   const undo = useCallback(() => {
     history.undo();
     setSelection(null);
@@ -283,8 +544,8 @@ export function Editor() {
     setMenu(null);
   }, [history]);
 
-  // Delete / Backspace removes the selection; arrow keys nudge a focused note;
-  // Ctrl/Cmd+Z undoes, Ctrl/Cmd+Shift+Z (or Ctrl+Y) redoes.
+  // Global keyboard map. Modifier combos (undo/redo) are always active; the
+  // single-key commands are ignored while typing in a form field.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const mod = event.metaKey || event.ctrlKey;
@@ -302,67 +563,132 @@ export function Editor() {
         redo();
         return;
       }
-      switch (event.key) {
+      if (mod) {
+        return;
+      }
+
+      const target = event.target as HTMLElement | null;
+      if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) {
+        return;
+      }
+
+      const key = event.key;
+      if (key === " ") {
+        event.preventDefault();
+        onListen();
+        return;
+      }
+      if (key === "Escape") {
+        event.preventDefault();
+        if (listen.playing) {
+          listen.stop();
+        }
+        stepOut();
+        return;
+      }
+
+      if (!editable) {
+        return;
+      }
+
+      switch (key) {
+        case "Enter":
+          event.preventDefault();
+          drillIn();
+          return;
+        case "Tab":
+          event.preventDefault();
+          cycleChord(event.shiftKey ? -1 : 1);
+          return;
         case "Delete":
         case "Backspace":
           event.preventDefault();
           deleteSelection();
-          break;
-        case "ArrowUp":
-          event.preventDefault();
-          nudge("pitch", 1);
-          break;
-        case "ArrowDown":
-          event.preventDefault();
-          nudge("pitch", -1);
-          break;
+          return;
         case "ArrowLeft":
           event.preventDefault();
-          nudge("beat", -1);
-          break;
+          navBeat(-1);
+          return;
         case "ArrowRight":
           event.preventDefault();
-          nudge("beat", 1);
-          break;
+          navBeat(1);
+          return;
+        case "ArrowUp":
+          event.preventDefault();
+          arrowPitch(1, event.shiftKey);
+          return;
+        case "ArrowDown":
+          event.preventDefault();
+          arrowPitch(-1, event.shiftKey);
+          return;
+        case "-":
+        case "_":
+          event.preventDefault();
+          accidentalOnFocus(-1);
+          return;
+        case "=":
+        case "+":
+          event.preventDefault();
+          accidentalOnFocus(1);
+          return;
+        case "0":
+          event.preventDefault();
+          accidentalOnFocus(0);
+          return;
         default:
           break;
+      }
+
+      const upper = key.length === 1 ? key.toUpperCase() : "";
+      if ("ABCDEFG".includes(upper)) {
+        event.preventDefault();
+        addLetter(upper as Pitch["step"]);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [deleteSelection, nudge, undo, redo]);
+  }, [
+    editable,
+    listen,
+    onListen,
+    stepOut,
+    drillIn,
+    cycleChord,
+    deleteSelection,
+    navBeat,
+    arrowPitch,
+    accidentalOnFocus,
+    addLetter,
+    undo,
+    redo,
+  ]);
 
   const onImport = useCallback(
     async (event: Event) => {
       const input = event.currentTarget as HTMLInputElement;
       const file = input.files?.[0];
-      // Reset the input up front so re-selecting the same file fires `change`
-      // again, even though the recognition below is async.
       input.value = "";
       if (!file) {
         return;
       }
-      // Route by file type: images/PDFs through OMR, .mxl via ZIP extraction,
-      // MIDI via conversion, and MusicXML/.xml read as plain text.
-      let musicxml: string | null;
+      let imported: string | null;
       if (isImportableImage(file)) {
-        musicxml = await imageImport.importImage(file);
+        imported = await imageImport.importImage(file);
       } else if (isMxl(file)) {
         const bytes = new Uint8Array(await file.arrayBuffer());
-        musicxml = await extractMusicXmlFromMxl(bytes);
+        imported = await extractMusicXmlFromMxl(bytes);
       } else if (isMidi(file)) {
         const bytes = new Uint8Array(await file.arrayBuffer());
         const parsed = parseMidi(bytes);
         const trackIndices = getMidiTracks(parsed).map((t) => t.index);
-        musicxml = midiToMusicXmlWithTracks(parsed, trackIndices);
+        imported = midiToMusicXmlWithTracks(parsed, trackIndices);
       } else {
-        musicxml = await file.text();
+        imported = await file.text();
       }
-      if (musicxml === null) {
+      if (imported === null) {
         return;
       }
-      // A fresh load resets history and the dirty baseline to the import.
-      history.reset(parseDocument(musicxml));
+      history.reset(parseDocument(imported));
       setSelection(null);
       setMenu(null);
     },
@@ -377,56 +703,101 @@ export function Editor() {
     anchor.download = "score.musicxml";
     anchor.click();
     URL.revokeObjectURL(url);
-    // The on-disk file now matches the document: clear the dirty marker.
     history.markSaved();
   }, [history, musicxml]);
 
-  // Items depend on the selection: nudges need an unambiguous focused note.
+  // Context-menu items act on the current selection.
   const canNudge = focusedHandle(selection) !== null;
   const menuItems: ContextMenuItem[] = [
     {
       label: "Move up",
-      onSelect: () => nudge("pitch", 1),
+      onSelect: () => {
+        const handle = focusedHandle(selection);
+        if (handle) {
+          stepHandle(handle, 1, false);
+        }
+      },
       disabled: !canNudge,
     },
     {
       label: "Move down",
-      onSelect: () => nudge("pitch", -1),
+      onSelect: () => {
+        const handle = focusedHandle(selection);
+        if (handle) {
+          stepHandle(handle, -1, false);
+        }
+      },
       disabled: !canNudge,
     },
     {
-      label: "Move left",
-      onSelect: () => nudge("beat", -1),
-      disabled: !canNudge,
-    },
-    {
-      label: "Move right",
-      onSelect: () => nudge("beat", 1),
-      disabled: !canNudge,
+      label: "Add note",
+      onSelect: () => addNoteToCurrent(),
+      disabled: !chordInfo,
     },
     { label: "Delete", onSelect: deleteSelection, disabled: !hasSelection },
   ];
+
+  // Accidental toolbar buttons act on the drilled note.
+  const accidentalButtonStyle = (enabled: boolean) =>
+    ({
+      width: 30,
+      height: 28,
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
+      borderRadius: RADIUS.button,
+      border: `1px solid ${COLORS.borderButton}`,
+      background: COLORS.canvas,
+      color: enabled ? COLORS.textPrimary : COLORS.textPlaceholder,
+      cursor: enabled ? "pointer" : "default",
+      fontFamily: FONTS.music,
+      fontSize: 15,
+    }) as const;
+
+  const selectionReadout = chordInfo
+    ? `Sel: m.${chordInfo.measureIndex + 1} · ${chordInfo.notes.length} ${
+        chordInfo.notes.length === 1 ? "note" : "notes"
+      }`
+    : "No selection";
 
   return (
     <div
       style={{
         display: "flex",
         flexDirection: "column",
-        gap: 12,
-        padding: 16,
         height: "100%",
         boxSizing: "border-box",
-        fontFamily: "ui-sans-serif, system-ui, sans-serif",
+        fontFamily: FONTS.ui,
+        background: COLORS.appBg,
+        color: COLORS.textPrimary,
       }}
     >
+      {/* Toolbar */}
       <div
         style={{
           display: "flex",
-          gap: 12,
+          gap: 8,
           alignItems: "center",
+          minHeight: LAYOUT.toolbarHeight,
+          padding: "0 12px",
+          background: COLORS.panel,
+          borderBottom: `1px solid ${COLORS.borderLight}`,
           flexWrap: "wrap",
         }}
       >
+        <label style={toolbarButtonStyle(!imageImport.busy)}>
+          Import
+          <input
+            type="file"
+            accept=".musicxml,.xml,.mxl,.mid,.midi,audio/midi,.pdf,image/*"
+            onChange={onImport}
+            disabled={imageImport.busy}
+            style={{ display: "none" }}
+          />
+        </label>
+        <span
+          style={{ width: 1, height: 22, background: COLORS.borderLight }}
+        />
         <button
           type="button"
           onClick={undo}
@@ -451,6 +822,38 @@ export function Editor() {
         >
           Delete
         </button>
+        <span
+          style={{ width: 1, height: 22, background: COLORS.borderLight }}
+        />
+        {(
+          [
+            { glyph: "♭", value: -1, title: "Flat" },
+            { glyph: "♮", value: 0, title: "Natural" },
+            { glyph: "♯", value: 1, title: "Sharp" },
+          ] as const
+        ).map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            title={option.title}
+            onClick={() => accidentalOnFocus(option.value)}
+            disabled={!canNudge}
+            style={accidentalButtonStyle(canNudge)}
+          >
+            {option.glyph}
+          </button>
+        ))}
+        <span
+          style={{ width: 1, height: 22, background: COLORS.borderLight }}
+        />
+        <button
+          type="button"
+          onClick={onInsertMeasure}
+          disabled={!editable}
+          style={toolbarButtonStyle(editable)}
+        >
+          + Measure
+        </button>
         <span style={{ flex: 1 }} />
         {dirty ? (
           <span
@@ -461,7 +864,7 @@ export function Editor() {
               alignItems: "center",
               gap: 6,
               fontSize: 13,
-              color: "#8a6d3b",
+              color: COLORS.warning,
             }}
           >
             <span
@@ -469,79 +872,166 @@ export function Editor() {
                 width: 8,
                 height: 8,
                 borderRadius: "50%",
-                background: "#f59e0b",
+                background: COLORS.warningDot,
               }}
             />
             Unsaved
           </span>
         ) : null}
-        <label
-          style={{
-            padding: "6px 12px",
-            borderRadius: 6,
-            border: "1px solid #ccc",
-            background: "#fff",
-            cursor: imageImport.busy ? "default" : "pointer",
-            color: imageImport.busy ? "#aaa" : "#333",
-            fontSize: 14,
-          }}
-        >
-          Import
-          <input
-            type="file"
-            accept=".musicxml,.xml,.mxl,.mid,.midi,audio/midi,.pdf,image/*"
-            onChange={onImport}
-            disabled={imageImport.busy}
-            style={{ display: "none" }}
-          />
-        </label>
         <button
           type="button"
           onClick={onExport}
-          style={{
-            padding: "6px 12px",
-            borderRadius: 6,
-            border: "1px solid #ccc",
-            background: "#fff",
-            color: "#333",
-            cursor: "pointer",
-            fontSize: 14,
-          }}
+          style={toolbarButtonStyle(true)}
         >
           Export
         </button>
+        <button
+          type="button"
+          onClick={onListen}
+          style={{
+            padding: "6px 14px",
+            borderRadius: RADIUS.button,
+            border: "none",
+            background: listen.playing ? COLORS.green : COLORS.accent,
+            color: "#fff",
+            cursor: "pointer",
+            fontSize: 13,
+            fontFamily: FONTS.ui,
+          }}
+        >
+          {listen.playing ? "■ Stop" : "▶ Listen"}
+        </button>
       </div>
+
+      {/* Instruction strip — keyboard cheat sheet. */}
+      <div
+        style={{
+          minHeight: LAYOUT.instructionStripHeight,
+          display: "flex",
+          alignItems: "center",
+          padding: "0 14px",
+          background: COLORS.instructionStrip,
+          borderBottom: `1px solid ${COLORS.borderLight}`,
+          fontFamily: FONTS.mono,
+          fontSize: 11.5,
+          color: COLORS.textSecondary,
+          gap: 14,
+          flexWrap: "wrap",
+        }}
+      >
+        <span>Click: select beat</span>
+        <span>Enter: drill in · Esc: out</span>
+        <span>↑↓: pitch (⇧ octave)</span>
+        <span>←→: beat · Tab: cycle</span>
+        <span>A–G: add · −/=/0: ♭♯♮</span>
+        <span>Space: listen</span>
+      </div>
+
+      {/* Import status / error. */}
       {imageImport.status !== null ? (
-        <div style={{ fontSize: 13, color: "#555" }}>{imageImport.status}</div>
-      ) : null}
-      {imageImport.error !== null ? (
-        <div style={{ fontSize: 13, color: "#c62828" }}>
-          Import failed: {imageImport.error}
-        </div>
-      ) : null}
-      {!editable ? (
         <div
           style={{
             fontSize: 13,
-            color: "#8a6d3b",
-            background: "#fff8e1",
-            border: "1px solid #f0e0a0",
-            borderRadius: 6,
-            padding: "6px 10px",
+            color: COLORS.textSecondary,
+            padding: "4px 14px",
           }}
         >
-          This score uses multiple staves or voices, which the editor can't edit
-          yet — it's view-only. Editing tools are disabled.
+          {imageImport.status}
         </div>
       ) : null}
-      <div style={{ flex: 1, minHeight: 0 }}>
-        <EditableSheetMusic
-          musicxml={musicxml}
-          noteHighlights={noteHighlights}
-          onTap={handleTap}
-          onContextMenu={handleContextMenu}
+      {imageImport.error !== null ? (
+        <div style={{ fontSize: 13, color: COLORS.error, padding: "4px 14px" }}>
+          Import failed: {imageImport.error}
+        </div>
+      ) : null}
+
+      {/* Body: score canvas + inspector. */}
+      <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+        <div
+          style={{
+            flex: 1,
+            minWidth: 0,
+            background: COLORS.canvas,
+            padding: 8,
+            boxSizing: "border-box",
+          }}
+        >
+          <EditableSheetMusic
+            musicxml={musicxml}
+            noteHighlights={noteHighlights}
+            onTap={handleTap}
+            onContextMenu={handleContextMenu}
+            accentColor={COLORS.accent}
+            getLiveBeat={listen.getLiveBeat}
+            isPlaying={listen.playing}
+            scrollLocked={listen.playing}
+          />
+        </div>
+        <Inspector
+          model={inspector?.model ?? null}
+          editable={editable}
+          onDrill={(index) => {
+            const handle = inspector?.handles[index];
+            if (handle) {
+              setSelection({ kind: "note", handle });
+            }
+          }}
+          onAccidental={(index, alter) => {
+            const handle = inspector?.handles[index];
+            if (handle) {
+              setAccidentalOn(handle, alter);
+            }
+          }}
+          onStep={(index, delta) => {
+            const handle = inspector?.handles[index];
+            if (handle) {
+              stepHandle(handle, delta, false);
+            }
+          }}
+          onRemove={(index) => {
+            const handle = inspector?.handles[index];
+            if (handle) {
+              removeHandle(handle);
+            }
+          }}
+          onAddNote={() => addNoteToCurrent()}
         />
       </div>
+
+      {/* Transport bar. */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 14,
+          minHeight: 40,
+          padding: "0 14px",
+          background: COLORS.panel,
+          borderTop: `1px solid ${COLORS.borderLight}`,
+          fontFamily: FONTS.mono,
+          fontSize: 12,
+          color: COLORS.textMuted,
+        }}
+      >
+        <button
+          type="button"
+          aria-label={listen.playing ? "Pause" : "Play"}
+          onClick={onListen}
+          style={{
+            border: "none",
+            background: "transparent",
+            cursor: "pointer",
+            fontSize: 14,
+            color: listen.playing ? COLORS.green : COLORS.textSecondary,
+          }}
+        >
+          {listen.playing ? "⏸" : "▶"}
+        </button>
+        <span>♩ = 100</span>
+        <span style={{ flex: 1 }} />
+        <span>{selectionReadout}</span>
+      </div>
+
       {menu && hasSelection ? (
         <ContextMenu
           x={menu.x}
