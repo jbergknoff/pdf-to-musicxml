@@ -472,7 +472,7 @@ describe("isEditableDocument", () => {
     expect(isEditableDocument(doc)).toBe(true);
   });
 
-  test("a grand-staff part (multiple staves + backup) is view-only", () => {
+  test("a simple grand-staff part (one backup per measure) is editable", () => {
     const rondo = readFileSync(
       fileURLToPath(
         new URL(
@@ -482,7 +482,31 @@ describe("isEditableDocument", () => {
       ),
       "utf8",
     );
-    expect(isEditableDocument(parseDocument(rondo))).toBe(false);
+    expect(isEditableDocument(parseDocument(rondo))).toBe(true);
+  });
+
+  test("a multi-voice grand-staff part (multiple backups per measure) is view-only", () => {
+    // Two voices per staff = 3 backups per measure; too complex for surgical edits.
+    const multiVoice = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes>
+        <divisions>4</divisions>
+        <staves>2</staves>
+      </attributes>
+      <note><pitch><step>C</step><octave>5</octave></pitch><duration>4</duration><staff>1</staff></note>
+      <backup><duration>16</duration></backup>
+      <note><pitch><step>G</step><octave>4</octave></pitch><duration>4</duration><staff>1</staff></note>
+      <backup><duration>16</duration></backup>
+      <note><pitch><step>C</step><octave>3</octave></pitch><duration>4</duration><staff>2</staff></note>
+      <backup><duration>16</duration></backup>
+      <note><pitch><step>G</step><octave>2</octave></pitch><duration>4</duration><staff>2</staff></note>
+    </measure>
+  </part>
+</score-partwise>`;
+    expect(isEditableDocument(parseDocument(multiVoice))).toBe(false);
   });
 
   test("a multi-part score is view-only", () => {
@@ -496,6 +520,127 @@ describe("isEditableDocument", () => {
   <part id="P2"><measure number="1"></measure></part>
 </score-partwise>`;
     expect(isEditableDocument(parseDocument(twoParts))).toBe(false);
+  });
+});
+
+// A minimal two-staff (grand staff) fixture: treble + bass, one voice each,
+// one backup per measure — the "simple grand staff" shape the editor supports.
+const GRAND_STAFF_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes>
+        <divisions>4</divisions>
+        <time><beats>4</beats><beat-type>4</beat-type></time>
+        <staves>2</staves>
+        <clef number="1"><sign>G</sign><line>2</line></clef>
+        <clef number="2"><sign>F</sign><line>4</line></clef>
+      </attributes>
+      <note><pitch><step>E</step><octave>5</octave></pitch><duration>4</duration><type>quarter</type><staff>1</staff></note>
+      <backup><duration>16</duration></backup>
+      <note><pitch><step>G</step><octave>2</octave></pitch><duration>4</duration><type>quarter</type><staff>2</staff></note>
+    </measure>
+  </part>
+</score-partwise>`;
+
+describe("grand-staff editing", () => {
+  function grandStaffChords(
+    score: ReturnType<typeof parseScore>,
+    partIndex: number,
+  ): Array<{ onsetBeat: number; notes: Array<{ step: string }> }> {
+    const result: Array<{ onsetBeat: number; notes: Array<{ step: string }> }> =
+      [];
+    const part = score.parts[partIndex];
+    if (!part) {
+      return result;
+    }
+    let beat = 0;
+    const divisions = part.measures[0]?.divisions || 4;
+    for (const event of part.measures[0]?.events ?? []) {
+      if (!isRest(event)) {
+        result.push({
+          onsetBeat: beat,
+          notes: (event as ChordGroup).notes.map((n) => ({
+            step: n.pitch.step,
+          })),
+        });
+      }
+      beat += event.duration / divisions;
+    }
+    return result;
+  }
+
+  test("removeNote on staff 1 leaves staff 2 intact", () => {
+    const doc = parseDocument(GRAND_STAFF_XML);
+    // E5 is note element index 0 (staff 1). Remove it.
+    removeNote(doc, { measureIndex: 0, noteElementIndex: 0 });
+    const score = parseScore(serializeDocument(doc));
+    // Treble staff (parts[0]) is all rests.
+    expect(score.parts[0].measures[0].events.every(isRest)).toBe(true);
+    // Bass staff (parts[1]) still has G2.
+    const bassChords = grandStaffChords(score, 1);
+    expect(bassChords.length).toBe(1);
+    expect(bassChords[0].notes[0].step).toBe("G");
+  });
+
+  test("removeNote on staff 2 leaves staff 1 intact", () => {
+    const doc = parseDocument(GRAND_STAFF_XML);
+    // G2 is note element index 1 (staff 2). Remove it.
+    removeNote(doc, { measureIndex: 0, noteElementIndex: 1 });
+    const score = parseScore(serializeDocument(doc));
+    // Bass staff (parts[1]) is all rests.
+    expect(score.parts[1].measures[0].events.every(isRest)).toBe(true);
+    // Treble staff (parts[0]) still has E5.
+    const trebleChords = grandStaffChords(score, 0);
+    expect(trebleChords.length).toBe(1);
+    expect(trebleChords[0].notes[0].step).toBe("E");
+  });
+
+  test("notes have source provenance for both staves", () => {
+    const score = parseScore(GRAND_STAFF_XML);
+    // Grand staff parses into two parts.
+    expect(score.parts.length).toBe(2);
+    const trebleNote = (score.parts[0].measures[0].events[0] as ChordGroup)
+      .notes[0];
+    const bassNote = (score.parts[1].measures[0].events[0] as ChordGroup)
+      .notes[0];
+    // Both staves carry source provenance so the editor can select/edit them.
+    expect(trebleNote.source).toEqual({ measureIndex: 0, noteElementIndex: 0 });
+    expect(bassNote.source).toEqual({ measureIndex: 0, noteElementIndex: 1 });
+  });
+
+  test("addNote inserts into the correct staff", () => {
+    const doc = parseDocument(GRAND_STAFF_XML);
+    // Add a note to the bass staff at beat 1.
+    addNote(doc, {
+      measureIndex: 0,
+      onsetBeatInMeasure: 1,
+      durationBeats: 1,
+      pitch: { step: "C", alter: 0, octave: 3 },
+      staff: 2,
+    });
+    const score = parseScore(serializeDocument(doc));
+    // Treble (parts[0]) is unchanged — still one note.
+    const trebleChords = grandStaffChords(score, 0);
+    expect(trebleChords.length).toBe(1);
+    expect(trebleChords[0].notes[0].step).toBe("E");
+    // Bass (parts[1]) now has two notes: G2 at beat 0 and C3 at beat 1.
+    const bassChords = grandStaffChords(score, 1);
+    expect(bassChords.length).toBe(2);
+    expect(bassChords[0].notes[0].step).toBe("G");
+    expect(bassChords[1].notes[0].step).toBe("C");
+  });
+
+  test("insertMeasure creates a valid grand-staff blank measure", () => {
+    const doc = parseDocument(GRAND_STAFF_XML);
+    insertMeasure(doc);
+    const score = parseScore(serializeDocument(doc));
+    expect(score.parts[0].measures.length).toBe(2);
+    expect(score.parts[1].measures.length).toBe(2);
+    // The new measure is all rests in both staves.
+    expect(score.parts[0].measures[1].events.every(isRest)).toBe(true);
+    expect(score.parts[1].measures[1].events.every(isRest)).toBe(true);
   });
 });
 

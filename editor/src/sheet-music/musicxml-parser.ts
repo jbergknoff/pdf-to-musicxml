@@ -223,10 +223,17 @@ function clefsByStaff(
 // Walk a measure's children in document order, tracking the MusicXML time cursor
 // (advanced by note durations, rewound by <backup>, advanced by <forward>), and
 // record every note/rest with the staff it belongs to and its onset.
-function collectStaffItems(measureEl: Element): StaffItem[] {
+// `measureIndex` is the 0-based index of this measure within its part; it is
+// threaded into the parsed notes as `source.measureIndex` so the editor can
+// map a clicked note back to its DOM element.
+function collectStaffItems(
+  measureEl: Element,
+  measureIndex: number,
+): StaffItem[] {
   const items: StaffItem[] = [];
   let cursor = 0;
   let lastOnset = 0;
+  let noteElementIndex = 0;
   for (const child of Array.from(measureEl.children)) {
     const tag = child.tagName.toLowerCase();
     if (tag === "note") {
@@ -247,10 +254,11 @@ function collectStaffItems(measureEl: Element): StaffItem[] {
         staff,
         onset,
         durationReal,
-        parsed: parseRawNote(child),
+        parsed: parseRawNote(child, { measureIndex, noteElementIndex }),
         isChord,
         isGrace,
       });
+      noteElementIndex++;
       if (!isChord && !isGrace) {
         lastOnset = cursor;
         cursor += durationReal;
@@ -421,7 +429,7 @@ function parseMultiStaffPart(partEl: Element, id: string): ParsedPart[] {
       )
       .find((d) => d > 0) ?? NORMALIZED_DIVISIONS;
 
-  for (const measureEl of measureEls) {
+  for (const [mi, measureEl] of measureEls.entries()) {
     const attrEl = measureEl.querySelector("attributes");
     const declaredDivisions = attrEl
       ? Number.parseInt(
@@ -436,7 +444,7 @@ function parseMultiStaffPart(partEl: Element, id: string): ParsedPart[] {
     const timeSig = attrEl ? parseTimeSig(attrEl) : undefined;
     const keySig = attrEl ? parseKeySig(attrEl) : undefined;
 
-    const items = collectStaffItems(measureEl);
+    const items = collectStaffItems(measureEl, mi);
     const scale = NORMALIZED_DIVISIONS / runningDivisions;
     const globalContentEndReal = items.reduce(
       (end, it) => Math.max(end, it.onset + it.durationReal),

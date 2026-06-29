@@ -93,7 +93,7 @@ function AccidentalControl({
             title={
               option.value < 0 ? "Flat" : option.value > 0 ? "Sharp" : "Natural"
             }
-            onClick={() => onSet(option.value)}
+            onClick={() => onSet(applied ? 0 : option.value)}
             style={{
               padding: "2px 7px",
               border: "none",

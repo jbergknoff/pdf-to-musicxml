@@ -43,9 +43,28 @@ function resolveGesture(info: StagePointerInfo): EditorGesture {
     info.layout,
     info.measureStartBeats,
   );
-  // Step 1 edits the single (first) staff.
-  const clef = info.score.parts[0]?.clef ?? { sign: "G" as const, line: 2 };
-  const staffBottomY = info.layout.staffBottomYs[0] ?? 0;
+  // For grand staff there are multiple parts (one per staff), each at a
+  // different Y. Find the staff whose vertical extent is nearest the click: for
+  // a click within a staff the distance is zero; for a click between staves it
+  // resolves to whichever staff is closest. This ensures clicking the bass staff
+  // yields bass-range pitches rather than treble-range ones.
+  let partIndex = 0;
+  let minDist = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < info.layout.staffBottomYs.length; i++) {
+    const bottomY = info.layout.staffBottomYs[i] ?? 0;
+    const topY = bottomY - 4 * info.layout.staffSpace;
+    const clampedY = Math.max(topY, Math.min(bottomY, info.svgY));
+    const dist = Math.abs(clampedY - info.svgY);
+    if (dist < minDist) {
+      minDist = dist;
+      partIndex = i;
+    }
+  }
+  const clef = info.score.parts[partIndex]?.clef ?? {
+    sign: "G" as const,
+    line: 2,
+  };
+  const staffBottomY = info.layout.staffBottomYs[partIndex] ?? 0;
   const pitch = pitchFromY(
     info.svgY,
     staffBottomY,
@@ -93,7 +112,11 @@ export function EditableSheetMusic({
       isPlaying={isPlaying}
       scrollLocked={scrollLocked}
       // Allow horizontal pan: a plain drag scrolls rather than edits.
-      containerStyle={{ touchAction: "pan-x", height: "100%" }}
+      containerStyle={{
+        touchAction: "pan-x",
+        height: "100%",
+        cursor: "default",
+      }}
       // Leave the pointer uncaptured so a drag reaches the container's
       // drag-to-scroll; we only act on the (primary-button) down as a tap.
       captureStagePointer={false}

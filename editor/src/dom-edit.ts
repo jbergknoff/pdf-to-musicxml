@@ -113,14 +113,17 @@ export function serializeDocument(doc: Document): string {
   )}`;
 }
 
-// Whether the editor's surgical, single-voice ops can safely edit this
-// document. They assume **one part, one staff, and no interleaved voices**
-// (`<backup>`). A grand-staff piano part (multiple `<staves>` / `<backup>`) or a
-// multi-part score is view-only for now: not only would `writeMeasure` flatten
-// it to a single voice, but the multi-staff parser also leaves its notes without
-// the `source` provenance the editor selects and edits through. Mirrors the
-// parser's `isMultiStaffPart` so the editor's notion of "editable" matches what
-// the parser can map back to handles.
+// Whether the editor's surgical ops can safely edit this document.
+//
+// Multi-part scores are always view-only (the editor models one part at a time).
+// Single-part documents fall into two cases:
+//   • Single staff (no <staves> / <staves>1</staves>): editable as long as there
+//     is no <backup> element, which would indicate multiple voices per staff —
+//     those can't be safely rewritten by the single-voice writeMeasure.
+//   • Grand staff (<staves>2</staves>): editable when each measure uses at most
+//     one <backup> (one boundary between staves per measure). More backups mean
+//     multiple independent voices per staff — those would be flattened by the
+//     staff-by-staff rebuild writeMeasure does.
 export function isEditableDocument(doc: Document): boolean {
   const parts = Array.from(doc.querySelectorAll("part"));
   if (parts.length !== 1) {
@@ -128,8 +131,20 @@ export function isEditableDocument(doc: Document): boolean {
   }
   const part = parts[0];
   const staves = part.querySelector("staves")?.textContent;
-  if (staves && Number.parseInt(staves, 10) > 1) {
-    return false;
+  const staffCount = staves ? Number.parseInt(staves, 10) : 1;
+  if (staffCount > 1) {
+    // Grand staff: editable only when each measure has at most one backup
+    // (= one staff boundary per measure; more means multiple voices per staff).
+    const maxBackupsPerMeasure = staffCount - 1;
+    for (const measureEl of Array.from(part.querySelectorAll("measure"))) {
+      const backups = Array.from(measureEl.children).filter(
+        (c) => c.tagName.toLowerCase() === "backup",
+      ).length;
+      if (backups > maxBackupsPerMeasure) {
+        return false;
+      }
+    }
+    return true;
   }
   return part.querySelector("backup") === null;
 }
@@ -143,6 +158,21 @@ function measuresOf(doc: Document): Element[] {
   return Array.from(part.children).filter(
     (child) => child.tagName.toLowerCase() === "measure",
   );
+}
+
+// Number of staves declared in the part (1 for single-staff, 2 for grand staff).
+function staffCountOf(doc: Document): number {
+  const staves = doc
+    .querySelector("part")
+    ?.querySelector("staves")?.textContent;
+  return staves ? Math.max(1, Number.parseInt(staves, 10)) : 1;
+}
+
+// The staff number a `<note>` element belongs to (defaulting to 1 when no
+// `<staff>` child is present, as per the MusicXML default for single-staff parts).
+function staffOf(noteEl: Element): number {
+  const staffText = noteEl.querySelector("staff")?.textContent;
+  return staffText ? Number.parseInt(staffText, 10) : 1;
 }
 
 // Divisions-per-quarter and total divisions per measure, read from the first
@@ -292,30 +322,25 @@ function setChordFlag(doc: Document, noteEl: Element, isChord: boolean): void {
   }
 }
 
-// Re-emit a measure's note/rest run from a list of real notes. Removes every
-// existing `<note>` (rests and notes) and re-appends: each real note's *existing*
-// element verbatim (reused — this is what makes the edit faithful) with freshly
-// built `<rest>` notes filling every gap. Notes sharing an onset are emitted as a
-// chord — ordered low-to-high, the first plain and the rest flagged `<chord/>` —
-// so stacked pitches survive the rewrite. Non-note siblings (`<attributes>`, etc.)
-// keep their relative order; the notes are appended after them.
-function writeMeasure(
+// Emit one staff's note/rest run into `measureEl`. Called by `writeMeasure` for
+// each staff in turn. `staff` is the staff number to tag freshly created rests
+// with (0 = single-staff document, omit the <staff> element).
+function writeStaffNotes(
   doc: Document,
   measureEl: Element,
   notes: RealNote[],
   divisionsPerMeasure: number,
+  staff: number,
 ): void {
-  for (const noteEl of Array.from(measureEl.querySelectorAll("note"))) {
-    noteEl.remove();
-  }
+  const makeRest = (durationDivisions: number, fullMeasure = false) =>
+    createRestElement(doc, {
+      durationDivisions,
+      fullMeasure,
+      staff: staff > 0 ? staff : undefined,
+    });
 
   if (notes.length === 0) {
-    measureEl.appendChild(
-      createRestElement(doc, {
-        durationDivisions: divisionsPerMeasure,
-        fullMeasure: true,
-      }),
-    );
+    measureEl.appendChild(makeRest(divisionsPerMeasure, true));
     return;
   }
 
@@ -335,9 +360,7 @@ function writeMeasure(
   for (const onset of onsets) {
     if (onset > cursor) {
       for (const span of decompose(onset - cursor)) {
-        measureEl.appendChild(
-          createRestElement(doc, { durationDivisions: span }),
-        );
+        measureEl.appendChild(makeRest(span));
       }
     }
     // appendChild moves each element here (from its old slot, or another
@@ -356,9 +379,55 @@ function writeMeasure(
   }
   if (cursor < divisionsPerMeasure) {
     for (const span of decompose(divisionsPerMeasure - cursor)) {
-      measureEl.appendChild(
-        createRestElement(doc, { durationDivisions: span }),
-      );
+      measureEl.appendChild(makeRest(span));
+    }
+  }
+}
+
+// Re-emit a measure's note/rest run from a list of real notes. Removes every
+// existing `<note>` (rests and notes) and re-appends: each real note's *existing*
+// element verbatim (reused — this is what makes the edit faithful) with freshly
+// built `<rest>` notes filling every gap. Notes sharing an onset are emitted as a
+// chord — ordered low-to-high, the first plain and the rest flagged `<chord/>` —
+// so stacked pitches survive the rewrite. Non-note siblings (`<attributes>`, etc.)
+// keep their relative order; the notes are appended after them.
+//
+// For grand staff (`staffCount > 1`): `notes` may contain notes from all staves;
+// they are split by <staff>, each staff's run is emitted in turn, separated by
+// <backup> elements. Freshly created rests carry the <staff> number of the staff
+// they fill. Existing note elements already carry their own <staff> child.
+function writeMeasure(
+  doc: Document,
+  measureEl: Element,
+  notes: RealNote[],
+  divisionsPerMeasure: number,
+  staffCount = 1,
+): void {
+  for (const noteEl of Array.from(measureEl.querySelectorAll("note"))) {
+    noteEl.remove();
+  }
+
+  if (staffCount <= 1) {
+    writeStaffNotes(doc, measureEl, notes, divisionsPerMeasure, 0);
+    return;
+  }
+
+  // Grand staff: also remove existing backup/forward (they are rebuilt below).
+  for (const el of Array.from(measureEl.querySelectorAll("backup"))) {
+    el.remove();
+  }
+  for (const el of Array.from(measureEl.querySelectorAll("forward"))) {
+    el.remove();
+  }
+
+  // Emit each staff's notes followed by a <backup> block (except after the last).
+  for (let s = 1; s <= staffCount; s++) {
+    const staffNotes = notes.filter((n) => staffOf(n.element) === s);
+    writeStaffNotes(doc, measureEl, staffNotes, divisionsPerMeasure, s);
+    if (s < staffCount) {
+      const backupEl = doc.createElement("backup");
+      backupEl.appendChild(child(doc, "duration", String(divisionsPerMeasure)));
+      measureEl.appendChild(backupEl);
     }
   }
 }
@@ -403,6 +472,8 @@ export function createNoteElement(
     durationDivisions: number;
     type?: NoteType;
     dot?: boolean;
+    /** Grand-staff only: which staff this note belongs to. Omit for single-staff. */
+    staff?: number;
   },
 ): Element {
   const [defaultType, defaultDot] = typeDotForDivisions(
@@ -421,12 +492,20 @@ export function createNoteElement(
   if (dot) {
     noteEl.appendChild(doc.createElement("dot"));
   }
+  if (options.staff !== undefined && options.staff > 0) {
+    noteEl.appendChild(child(doc, "staff", String(options.staff)));
+  }
   return noteEl;
 }
 
 export function createRestElement(
   doc: Document,
-  options: { durationDivisions: number; fullMeasure?: boolean },
+  options: {
+    durationDivisions: number;
+    fullMeasure?: boolean;
+    /** Grand-staff only: which staff this rest belongs to. Omit for single-staff. */
+    staff?: number;
+  },
 ): Element {
   const noteEl = doc.createElement("note");
   const restEl = doc.createElement("rest");
@@ -443,6 +522,9 @@ export function createRestElement(
     if (dot) {
       noteEl.appendChild(doc.createElement("dot"));
     }
+  }
+  if (options.staff !== undefined && options.staff > 0) {
+    noteEl.appendChild(child(doc, "staff", String(options.staff)));
   }
   return noteEl;
 }
@@ -557,6 +639,8 @@ export function addNote(
     onsetBeatInMeasure: number;
     durationBeats: number;
     pitch: Pitch;
+    /** Grand-staff only: which staff to insert into (1 = treble, 2 = bass). */
+    staff?: number;
   },
 ): NoteHandle | null {
   const measures = measuresOf(doc);
@@ -574,8 +658,16 @@ export function addNote(
   );
   const requested = Math.max(1, Math.round(options.durationBeats * divisions));
 
+  const sc = staffCountOf(doc);
+  const targetStaff = sc > 1 ? (options.staff ?? 1) : 0;
+
+  // For gap-detection, only look at notes in the same staff.
   const notes = readRealNotes(measureEl, divisions);
-  const nextOnset = notes.reduce(
+  const staffNotes =
+    targetStaff > 0
+      ? notes.filter((n) => staffOf(n.element) === targetStaff)
+      : notes;
+  const nextOnset = staffNotes.reduce(
     (min, note) =>
       note.onsetDivisions > onsetDivisions
         ? Math.min(min, note.onsetDivisions)
@@ -589,9 +681,10 @@ export function addNote(
     alter: options.pitch.alter,
     octave: options.pitch.octave,
     durationDivisions: fit,
+    staff: targetStaff > 0 ? targetStaff : undefined,
   });
   notes.push({ element, onsetDivisions, durationDivisions: fit });
-  writeMeasure(doc, measureEl, notes, divisionsPerMeasure);
+  writeMeasure(doc, measureEl, notes, divisionsPerMeasure, sc);
   return handleFor(measuresOf(doc), options.measureIndex, element);
 }
 
@@ -619,6 +712,7 @@ export function removeNotes(doc: Document, handles: NoteHandle[]): void {
     return;
   }
   const { divisions, divisionsPerMeasure } = measureMetrics(doc);
+  const sc = staffCountOf(doc);
   const removeSet = new Set(elements);
   const measureEls = new Set<Element>();
   for (const element of elements) {
@@ -630,7 +724,7 @@ export function removeNotes(doc: Document, handles: NoteHandle[]): void {
     const notes = readRealNotes(measureEl, divisions).filter(
       (note) => !removeSet.has(note.element),
     );
-    writeMeasure(doc, measureEl, notes, divisionsPerMeasure);
+    writeMeasure(doc, measureEl, notes, divisionsPerMeasure, sc);
   }
 }
 
@@ -642,6 +736,7 @@ export function removeNote(doc: Document, handle: NoteHandle): void {
     return;
   }
   const { divisions, divisionsPerMeasure } = measureMetrics(doc);
+  const sc = staffCountOf(doc);
   const target = elementForHandle(doc, handle);
   if (!target) {
     return;
@@ -649,7 +744,7 @@ export function removeNote(doc: Document, handle: NoteHandle): void {
   const notes = readRealNotes(measureEl, divisions).filter(
     (note) => note.element !== target,
   );
-  writeMeasure(doc, measureEl, notes, divisionsPerMeasure);
+  writeMeasure(doc, measureEl, notes, divisionsPerMeasure, sc);
 }
 
 // Move a note to a new pitch and/or onset (possibly a different measure). The
@@ -705,12 +800,13 @@ export function moveNote(
     setDuration(doc, element, fit);
   }
 
+  const sc = staffCountOf(doc);
   destNotes.push({ element, onsetDivisions, durationDivisions: fit });
-  writeMeasure(doc, destMeasureEl, destNotes, divisionsPerMeasure);
+  writeMeasure(doc, destMeasureEl, destNotes, divisionsPerMeasure, sc);
   // A cross-measure move leaves a hole in the source measure to backfill.
   if (sourceMeasureEl !== destMeasureEl) {
     const sourceNotes = readRealNotes(sourceMeasureEl, divisions);
-    writeMeasure(doc, sourceMeasureEl, sourceNotes, divisionsPerMeasure);
+    writeMeasure(doc, sourceMeasureEl, sourceNotes, divisionsPerMeasure, sc);
   }
   return handleFor(measuresOf(doc), target.measureIndex, element);
 }
@@ -795,18 +891,21 @@ export function addNoteToChord(
       ? { step: "C", alter: 0, octave: 5 }
       : pitchFromDiatonic(topDiatonic + 2));
 
+  const sc = staffCountOf(doc);
+  const anchorStaff = sc > 1 ? staffOf(target) : undefined;
   const element = createNoteElement(doc, {
     step: newPitch.step,
     alter: newPitch.alter,
     octave: newPitch.octave,
     durationDivisions: anchor.durationDivisions,
+    staff: anchorStaff,
   });
   notes.push({
     element,
     onsetDivisions: anchor.onsetDivisions,
     durationDivisions: anchor.durationDivisions,
   });
-  writeMeasure(doc, measureEl, notes, divisionsPerMeasure);
+  writeMeasure(doc, measureEl, notes, divisionsPerMeasure, sc);
   return handleFor(measuresOf(doc), handle.measureIndex, element);
 }
 
@@ -823,13 +922,34 @@ export function insertMeasure(
     return null;
   }
   const { divisionsPerMeasure } = measureMetrics(doc);
+  const sc = staffCountOf(doc);
   const newMeasure = doc.createElement("measure");
-  newMeasure.appendChild(
-    createRestElement(doc, {
-      durationDivisions: divisionsPerMeasure,
-      fullMeasure: true,
-    }),
-  );
+  if (sc <= 1) {
+    newMeasure.appendChild(
+      createRestElement(doc, {
+        durationDivisions: divisionsPerMeasure,
+        fullMeasure: true,
+      }),
+    );
+  } else {
+    // Grand staff: one full-measure rest per staff, separated by <backup>.
+    for (let s = 1; s <= sc; s++) {
+      newMeasure.appendChild(
+        createRestElement(doc, {
+          durationDivisions: divisionsPerMeasure,
+          fullMeasure: true,
+          staff: s,
+        }),
+      );
+      if (s < sc) {
+        const backupEl = doc.createElement("backup");
+        backupEl.appendChild(
+          child(doc, "duration", String(divisionsPerMeasure)),
+        );
+        newMeasure.appendChild(backupEl);
+      }
+    }
+  }
 
   const index = afterIndex ?? measures.length - 1;
   const ref = measures[Math.max(0, Math.min(index, measures.length - 1))];
