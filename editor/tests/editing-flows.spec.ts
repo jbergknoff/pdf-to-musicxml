@@ -34,6 +34,32 @@ function pitchCount(xml: string): number {
   return (xml.match(/<pitch>/g) ?? []).length;
 }
 
+function restCount(xml: string): number {
+  return (xml.match(/<rest\b/g) ?? []).length;
+}
+
+// The first measure's note/rest run in document order: each note rendered as
+// `<step><octave>` (e.g. "E5") and each rest as "REST". Used to assert a pitch
+// edit kept the note in place rather than shoving it rightward behind a rest.
+function noteSequence(xml: string): string[] {
+  const measure = xml.split("<measure")[1] ?? "";
+  const tokens: string[] = [];
+  const noteRe = /<note\b[^>]*>([\s\S]*?)<\/note>/g;
+  let match: RegExpExecArray | null;
+  // biome-ignore lint/suspicious/noAssignInExpressions: regex scan loop
+  while ((match = noteRe.exec(measure)) !== null) {
+    const body = match[1];
+    if (/<rest\b/.test(body)) {
+      tokens.push("REST");
+      continue;
+    }
+    const step = body.match(/<step>(\w)<\/step>/)?.[1] ?? "?";
+    const octave = body.match(/<octave>(\d)<\/octave>/)?.[1] ?? "?";
+    tokens.push(`${step}${octave}`);
+  }
+  return tokens;
+}
+
 // Load the single-staff fixture (three quarter notes C/E/G) and wait for it.
 async function loadSingleStaff(page: Page): Promise<void> {
   await importFile(page, SINGLE_STAFF);
@@ -90,6 +116,30 @@ test("tapping a note selects it; Delete removes it; undo/redo reverse that", asy
 
   await page.keyboard.press("Control+Shift+z");
   expect(pitchCount(await exportXml(page))).toBe(2);
+});
+
+test("stepping a note's pitch up keeps its onset (no rest inserted to its left)", async ({
+  page,
+}) => {
+  await loadSingleStaff(page);
+  // The fixture is three quarter notes C5 E5 G5 then a quarter rest.
+  const before = await exportXml(page);
+  expect(noteSequence(before)).toEqual(["C5", "E5", "G5", "REST"]);
+  expect(restCount(before)).toBe(1);
+
+  // Select the middle note (E5, beat 2) and raise its pitch one staff step via
+  // the inspector's "Up one step" stepper.
+  await page.locator("#p0-m1-n1-v0").click();
+  await page.getByTitle("Up one step").first().click();
+
+  // Only the pitch changes: E5 → F5 in the same slot. The note must NOT be
+  // pushed rightward behind a freshly inserted rest — the rest count is
+  // unchanged and the sequence keeps the note at beat 2 (this is the bug the
+  // test guards against).
+  const after = await exportXml(page);
+  expect(noteSequence(after)).toEqual(["C5", "F5", "G5", "REST"]);
+  expect(restCount(after)).toBe(1);
+  expect(pitchCount(after)).toBe(3);
 });
 
 test("tapping empty space clears the selection", async ({ page }) => {
