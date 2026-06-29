@@ -224,12 +224,81 @@ function readRealNotes(measureEl: Element, _divisions: number): RealNote[] {
   return notes;
 }
 
-// Re-emit a measure's note/rest run from a list of real notes (onset-ordered).
-// Removes every existing `<note>` (rests and notes) and re-appends: each real
-// note's *existing* element verbatim (reused — this is what makes the edit
-// faithful) with freshly built `<rest>` notes filling every gap. Non-note
-// siblings (`<attributes>`, etc.) keep their relative order; the notes are
-// appended after them.
+// Diatonic step letters, low to high within an octave.
+const STEPS: Pitch["step"][] = ["C", "D", "E", "F", "G", "A", "B"];
+
+// A pitch's height as a single comparable number (semitone-ish), used only to
+// order chord members low-to-high. Reads the note element's `<pitch>` directly.
+const SEMITONE_OF_STEP: Record<string, number> = {
+  C: 0,
+  D: 2,
+  E: 4,
+  F: 5,
+  G: 7,
+  A: 9,
+  B: 11,
+};
+function pitchHeight(noteEl: Element): number {
+  const pitchEl = noteEl.querySelector("pitch");
+  if (!pitchEl) {
+    return 0;
+  }
+  const step = pitchEl.querySelector("step")?.textContent ?? "C";
+  const octave = Number.parseInt(
+    pitchEl.querySelector("octave")?.textContent ?? "4",
+    10,
+  );
+  const alter = Number.parseInt(
+    pitchEl.querySelector("alter")?.textContent ?? "0",
+    10,
+  );
+  return octave * 12 + (SEMITONE_OF_STEP[step] ?? 0) + alter;
+}
+
+// Read a note element's `<pitch>` into a Pitch (or null for a rest). Local to
+// dom-edit to avoid a circular import with hit-test (which imports dom-edit).
+function readPitch(noteEl: Element): Pitch | null {
+  const pitchEl = noteEl.querySelector("pitch");
+  if (!pitchEl) {
+    return null;
+  }
+  const step = (pitchEl.querySelector("step")?.textContent ??
+    "C") as Pitch["step"];
+  const octave = Number.parseInt(
+    pitchEl.querySelector("octave")?.textContent ?? "4",
+    10,
+  );
+  const alterText = pitchEl.querySelector("alter")?.textContent;
+  const alter = alterText ? Number.parseInt(alterText, 10) : 0;
+  return { step, alter, octave };
+}
+
+// Ensure a note carries (or drops) the `<chord/>` flag. The first note of a beat
+// is plain; every later note sharing that onset is a chord member. The flag goes
+// before `<pitch>` (after `<grace>` when present, though the editable scope has
+// no grace notes).
+function setChordFlag(doc: Document, noteEl: Element, isChord: boolean): void {
+  const existing = Array.from(noteEl.children).find(
+    (childEl) => childEl.tagName.toLowerCase() === "chord",
+  );
+  if (isChord && !existing) {
+    const pitchEl = noteEl.querySelector("pitch");
+    noteEl.insertBefore(
+      doc.createElement("chord"),
+      pitchEl ?? noteEl.firstChild,
+    );
+  } else if (!isChord && existing) {
+    existing.remove();
+  }
+}
+
+// Re-emit a measure's note/rest run from a list of real notes. Removes every
+// existing `<note>` (rests and notes) and re-appends: each real note's *existing*
+// element verbatim (reused — this is what makes the edit faithful) with freshly
+// built `<rest>` notes filling every gap. Notes sharing an onset are emitted as a
+// chord — ordered low-to-high, the first plain and the rest flagged `<chord/>` —
+// so stacked pitches survive the rewrite. Non-note siblings (`<attributes>`, etc.)
+// keep their relative order; the notes are appended after them.
 function writeMeasure(
   doc: Document,
   measureEl: Element,
@@ -240,11 +309,7 @@ function writeMeasure(
     noteEl.remove();
   }
 
-  const ordered = [...notes].sort(
-    (a, b) => a.onsetDivisions - b.onsetDivisions,
-  );
-
-  if (ordered.length === 0) {
+  if (notes.length === 0) {
     measureEl.appendChild(
       createRestElement(doc, {
         durationDivisions: divisionsPerMeasure,
@@ -254,19 +319,40 @@ function writeMeasure(
     return;
   }
 
+  // Group notes by onset so same-onset notes render as one chord.
+  const byOnset = new Map<number, RealNote[]>();
+  for (const note of notes) {
+    const group = byOnset.get(note.onsetDivisions);
+    if (group) {
+      group.push(note);
+    } else {
+      byOnset.set(note.onsetDivisions, [note]);
+    }
+  }
+  const onsets = Array.from(byOnset.keys()).sort((a, b) => a - b);
+
   let cursor = 0;
-  for (const note of ordered) {
-    if (note.onsetDivisions > cursor) {
-      for (const span of decompose(note.onsetDivisions - cursor)) {
+  for (const onset of onsets) {
+    if (onset > cursor) {
+      for (const span of decompose(onset - cursor)) {
         measureEl.appendChild(
           createRestElement(doc, { durationDivisions: span }),
         );
       }
     }
-    // appendChild moves the element here (from its old slot, or another measure
-    // on a cross-measure relocation).
-    measureEl.appendChild(note.element);
-    cursor = note.onsetDivisions + note.durationDivisions;
+    // appendChild moves each element here (from its old slot, or another
+    // measure on a cross-measure relocation). Members are ordered low-to-high
+    // and re-flagged so the chord's first note is plain.
+    const members = (byOnset.get(onset) as RealNote[])
+      .slice()
+      .sort((a, b) => pitchHeight(a.element) - pitchHeight(b.element));
+    members.forEach((member, index) => {
+      setChordFlag(doc, member.element, index > 0);
+      measureEl.appendChild(member.element);
+    });
+    // Chord members share one rhythmic slot; advance by the longest member.
+    cursor =
+      onset + Math.max(...members.map((member) => member.durationDivisions));
   }
   if (cursor < divisionsPerMeasure) {
     for (const span of decompose(divisionsPerMeasure - cursor)) {
@@ -627,4 +713,135 @@ export function moveNote(
     writeMeasure(doc, sourceMeasureEl, sourceNotes, divisionsPerMeasure);
   }
   return handleFor(measuresOf(doc), target.measureIndex, element);
+}
+
+// Set (or clear) the printed alteration on a note's pitch: -1 flat, +1 sharp,
+// 0 natural (drops `<alter>`; ±2 for double accidentals). Mutated in place so
+// every other child (ties, articulations, lyrics) survives, and no rhythm
+// changes so the measure needs no rewrite. Returns false on a bad handle / rest.
+export function setAccidental(
+  doc: Document,
+  handle: NoteHandle,
+  alter: number,
+): boolean {
+  const element = elementForHandle(doc, handle);
+  if (!element) {
+    return false;
+  }
+  const pitchEl = element.querySelector("pitch");
+  if (!pitchEl) {
+    return false;
+  }
+  const existing = pitchEl.querySelector("alter");
+  if (alter === 0) {
+    existing?.remove();
+  } else if (existing) {
+    existing.textContent = String(alter);
+  } else {
+    // `<alter>` sits between `<step>` and `<octave>`.
+    pitchEl.insertBefore(
+      child(doc, "alter", String(alter)),
+      pitchEl.querySelector("octave"),
+    );
+  }
+  return true;
+}
+
+// Diatonic step index (octave * 7 + step), the staff-position ordinal.
+function diatonicOf(pitch: Pitch): number {
+  return pitch.octave * 7 + STEPS.indexOf(pitch.step);
+}
+
+function pitchFromDiatonic(index: number): Pitch {
+  const octave = Math.floor(index / 7);
+  const stepIndex = ((index % 7) + 7) % 7;
+  return { step: STEPS[stepIndex], alter: 0, octave };
+}
+
+// Add a note to the beat (chord) a handle points at — a stacked chord member at
+// the same onset and duration. `pitch` defaults to a diatonic third above the
+// beat's current top note (a sensible chord-building default). Returns the new
+// note's handle, or null on a bad handle.
+export function addNoteToChord(
+  doc: Document,
+  handle: NoteHandle,
+  pitch?: Pitch,
+): NoteHandle | null {
+  const measureEl = measuresOf(doc)[handle.measureIndex];
+  if (!measureEl) {
+    return null;
+  }
+  const target = elementForHandle(doc, handle);
+  if (!target) {
+    return null;
+  }
+  const { divisions, divisionsPerMeasure } = measureMetrics(doc);
+  const notes = readRealNotes(measureEl, divisions);
+  const anchor = notes.find((note) => note.element === target);
+  if (!anchor) {
+    return null;
+  }
+  // The notes already sounding at this beat, to seed the default pitch above.
+  const members = notes.filter(
+    (note) => note.onsetDivisions === anchor.onsetDivisions,
+  );
+  const topDiatonic = members.reduce((max, member) => {
+    const memberPitch = readPitch(member.element);
+    return memberPitch ? Math.max(max, diatonicOf(memberPitch)) : max;
+  }, Number.NEGATIVE_INFINITY);
+  const newPitch =
+    pitch ??
+    (topDiatonic === Number.NEGATIVE_INFINITY
+      ? { step: "C", alter: 0, octave: 5 }
+      : pitchFromDiatonic(topDiatonic + 2));
+
+  const element = createNoteElement(doc, {
+    step: newPitch.step,
+    alter: newPitch.alter,
+    octave: newPitch.octave,
+    durationDivisions: anchor.durationDivisions,
+  });
+  notes.push({
+    element,
+    onsetDivisions: anchor.onsetDivisions,
+    durationDivisions: anchor.durationDivisions,
+  });
+  writeMeasure(doc, measureEl, notes, divisionsPerMeasure);
+  return handleFor(measuresOf(doc), handle.measureIndex, element);
+}
+
+// Insert a blank (full-measure-rest) measure after `afterIndex` (default: the
+// end), then renumber every measure sequentially. Returns the new measure's
+// index, or null when the part has no measures to anchor against.
+export function insertMeasure(
+  doc: Document,
+  afterIndex?: number,
+): number | null {
+  const part = doc.querySelector("part");
+  const measures = measuresOf(doc);
+  if (!part || measures.length === 0) {
+    return null;
+  }
+  const { divisionsPerMeasure } = measureMetrics(doc);
+  const newMeasure = doc.createElement("measure");
+  newMeasure.appendChild(
+    createRestElement(doc, {
+      durationDivisions: divisionsPerMeasure,
+      fullMeasure: true,
+    }),
+  );
+
+  const index = afterIndex ?? measures.length - 1;
+  const ref = measures[Math.max(0, Math.min(index, measures.length - 1))];
+  if (ref.nextSibling) {
+    part.insertBefore(newMeasure, ref.nextSibling);
+  } else {
+    part.appendChild(newMeasure);
+  }
+
+  // Renumber all measures 1..N so the inserted one and its successors are right.
+  measuresOf(doc).forEach((measureEl, i) => {
+    measureEl.setAttribute("number", String(i + 1));
+  });
+  return index + 1;
 }

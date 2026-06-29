@@ -4,10 +4,23 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
     <title>MusicXML Editor</title>
+    <!-- IBM Plex (UI + data) and Noto Music (♭ ♮ ♯ glyphs) per the design tokens.
+         Loaded with crossorigin so they resolve under the page's COOP/COEP
+         isolation; the theme's font stacks fall back to system fonts if blocked. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Noto+Music&display=swap"
+      rel="stylesheet"
+      crossorigin
+    />
     <style>
       *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
       html, body {
         width: 100%; height: 100%;
+        font-family: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+        background: #eceef0;
+        -webkit-font-smoothing: antialiased;
       }
       #app {
         width: 100%; height: 100%;
