@@ -112,7 +112,7 @@ export function EditableSheetMusic({
       isPlaying={isPlaying}
       scrollLocked={scrollLocked}
       // Allow horizontal pan: a plain drag scrolls rather than edits.
-      containerStyle={{ touchAction: "pan-x", height: "100%" }}
+      containerStyle={{ touchAction: "pan-x", height: "100%", cursor: "default" }}
       // Leave the pointer uncaptured so a drag reaches the container's
       // drag-to-scroll; we only act on the (primary-button) down as a tap.
       captureStagePointer={false}
