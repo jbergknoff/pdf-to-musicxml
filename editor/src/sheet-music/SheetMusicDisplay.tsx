@@ -361,8 +361,7 @@ function beatColumnGeometry(
   for (let k = 0; k < spine.divs.length; k++) {
     if (Math.abs(spine.divs[k] - targetDiv) < 1) {
       const left = spine.xs[k] - staffSpace * 0.8;
-      const rawRight =
-        k + 1 < spine.xs.length ? spine.xs[k + 1] : measureEndX;
+      const rawRight = k + 1 < spine.xs.length ? spine.xs[k + 1] : measureEndX;
       const right = rawRight - staffSpace * 0.3;
       return { left, right: Math.max(left + staffSpace, right) };
     }

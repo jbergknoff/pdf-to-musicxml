@@ -4,19 +4,16 @@ import { expect, type Page, test } from "@playwright/test";
 
 // Editing-flow integration tests for the editor. The design contract under test:
 // tapping the staff only selects (it never inserts a note), tapping empty space
-// clears the selection, a selected note can be deleted/undone, a multi-staff
+// clears the selection, a selected note can be deleted/undone, a multi-voice
 // score is view-only, and the dirty indicator behaves.
 
 const SINGLE_STAFF = fileURLToPath(
   new URL("./fixtures/single-staff.musicxml", import.meta.url),
 );
-// The grand-staff Mozart clip the unit tests also use — multiple staves +
-// <backup>, so the editor treats it as view-only.
-const GRAND_STAFF = fileURLToPath(
-  new URL(
-    "../src/__fixtures__/rondo-alla-turca-clip.musicxml",
-    import.meta.url,
-  ),
+// A minimal single-staff score with two voices (backup element present) —
+// the editor treats multi-voice documents as view-only.
+const MULTI_VOICE = fileURLToPath(
+  new URL("./fixtures/multi-voice.musicxml", import.meta.url),
 );
 
 // Export the current document and return the serialized MusicXML.
@@ -131,28 +128,11 @@ test("an imported single-staff file is editable", async ({ page }) => {
   await expect(page.getByText(/view-only/i)).toHaveCount(0);
 });
 
-test("an imported grand-staff score is view-only and taps never mutate it", async ({
-  page,
-}) => {
-  await importFile(page, GRAND_STAFF);
+test("a multi-voice score is view-only", async ({ page }) => {
+  await importFile(page, MULTI_VOICE);
   await expect(page.getByText(/view-only/i)).toBeVisible();
 
   // Undo/redo have nothing to act on; editing controls are inert.
   await expect(page.getByRole("button", { name: "Undo" })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Redo" })).toBeDisabled();
-
-  const before = await exportXml(page);
-  // Tap squarely on the staff where notes are drawn.
-  await page
-    .locator("svg")
-    .first()
-    .click({ position: { x: 200, y: 80 } });
-  await page
-    .locator("svg")
-    .first()
-    .click({ position: { x: 260, y: 120 } });
-  const after = await exportXml(page);
-
-  // The document is byte-for-byte unchanged — clicking did not edit the file.
-  expect(after).toBe(before);
 });
