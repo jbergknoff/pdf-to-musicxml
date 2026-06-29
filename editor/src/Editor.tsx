@@ -566,6 +566,12 @@ export function Editor() {
       if (mod) {
         return;
       }
+      // Alt-modified keys are browser/OS shortcuts (e.g. Alt+D focuses the URL
+      // bar). Leave them to the browser rather than treating Alt+letter as note
+      // entry.
+      if (event.altKey) {
+        return;
+      }
 
       const target = event.target as HTMLElement | null;
       if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) {
