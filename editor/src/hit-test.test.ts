@@ -17,6 +17,7 @@ import {
   stepPitch,
 } from "./hit-test";
 import {
+  computeCursorX,
   computeMeasureStartBeats,
   noteY,
   parseScore,
@@ -42,11 +43,26 @@ describe("beatFromX", () => {
     ).toBe(measureStartBeats[1]);
   });
 
-  test("interpolates and snaps within a measure", () => {
-    const { score, layout, measureStartBeats } = blankLayout();
-    const midX = layout.measureXs[0] + layout.measureWidths[0] / 2;
-    // 4/4 measure: halfway across is beat 2.
-    expect(beatFromX(midX, score, layout, measureStartBeats)).toBe(2);
+  test("resolves to the nearest spine onset, not a linear interpolation", () => {
+    const doc = createBlankDocument();
+    // Place a note at beat 2 (the 3rd quarter of a 4/4 measure).
+    addNote(doc, {
+      measureIndex: 0,
+      onsetBeatInMeasure: 2,
+      durationBeats: 1,
+      pitch: { step: "C", alter: 0, octave: 5 },
+    });
+    const score = parseScore(serializeDocument(doc));
+    const layout = resolveLayout(score);
+    const measureStartBeats = computeMeasureStartBeats(score);
+    // The note's actual x from the forward cursor map.
+    const noteX = computeCursorX(2, score, layout, measureStartBeats);
+    if (noteX === null) {
+      throw new Error("expected a valid cursor x for beat 2");
+    }
+    expect(beatFromX(noteX, score, layout, measureStartBeats)).toBe(2);
+    // A click slightly to the right of the notehead still resolves to beat 2.
+    expect(beatFromX(noteX + 8, score, layout, measureStartBeats)).toBe(2);
   });
 });
 

@@ -9,6 +9,7 @@ import {
   type ChordGroup,
   computeMeasureStartBeats,
   diatonicIndex,
+  DIVISIONS,
   isRest,
   type NoteType,
   type ParsedScore,
@@ -27,10 +28,12 @@ function beatsPerMeasureOf(score: ParsedScore): number {
   return timeSig.beats * (4 / timeSig.beatType);
 }
 
-// Invert the renderer's measure x layout + per-measure beat span to turn an
-// SVG x into an absolute quarter-note beat, snapped to the 16th-note grid and
-// kept inside the clicked measure. Ports the inverse in SheetMusicDisplay's
-// context-menu handler.
+// Invert the renderer's measure x layout to turn an SVG x into an absolute
+// quarter-note beat. Rather than linear interpolation across the measure width
+// (which ignores the clef/key/time lead-in that pushes the first note right of
+// the barline), this resolves the click to the nearest actual onset position
+// from the shared rhythm spine, so a click on a notehead maps to that note's
+// exact beat.
 export function beatFromX(
   svgX: number,
   score: ParsedScore,
@@ -44,19 +47,30 @@ export function beatFromX(
     }
   }
   const beatsPerMeasure = beatsPerMeasureOf(score);
-  const measureX = layout.measureXs[measureIndex];
-  const measureWidth = layout.measureWidths[measureIndex];
-  const fraction = Math.max(0, Math.min(1, (svgX - measureX) / measureWidth));
   const measureStart =
     measureStartBeats[measureIndex] ?? measureIndex * beatsPerMeasure;
   const measureEnd =
     measureStartBeats[measureIndex + 1] ?? measureStart + beatsPerMeasure;
 
-  const beat = measureStart + fraction * (measureEnd - measureStart);
-  const snapped = Math.round(beat / SNAP_BEATS) * SNAP_BEATS;
-  // Keep the onset strictly inside the clicked measure (a click at the far edge
-  // would otherwise round up onto the next measure's downbeat).
-  return Math.max(measureStart, Math.min(snapped, measureEnd - SNAP_BEATS));
+  const spine = layout.measureSpines[measureIndex];
+  if (!spine || spine.divs.length === 0) {
+    return measureStart;
+  }
+
+  // Find the spine onset whose x is nearest to the click.
+  let bestIndex = 0;
+  let bestDist = Math.abs(spine.xs[0] - svgX);
+  for (let i = 1; i < spine.xs.length; i++) {
+    const d = Math.abs(spine.xs[i] - svgX);
+    if (d < bestDist) {
+      bestDist = d;
+      bestIndex = i;
+    }
+  }
+
+  // spine.divs is in layout divisions (DIVISIONS = 4 per quarter note).
+  const beat = measureStart + spine.divs[bestIndex] / DIVISIONS;
+  return Math.max(measureStart, Math.min(beat, measureEnd - SNAP_BEATS));
 }
 
 // Split an absolute beat into its measure index + onset within that measure.
