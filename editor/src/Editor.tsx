@@ -19,6 +19,14 @@ import {
   type EditorGesture,
 } from "./components/EditableSheetMusic";
 import { Inspector, type InspectorModel } from "./components/Inspector";
+import { MetadataDialog } from "./components/MetadataDialog";
+import { ScoreHeader } from "./components/ScoreHeader";
+import {
+  type EditableMetadata,
+  readMetadata,
+  stampImportProvenance,
+  writeMetadata,
+} from "./metadata";
 import {
   addNoteToChord,
   createBlankDocument,
@@ -149,6 +157,7 @@ export function Editor() {
   const { documentRef, version, commit } = history;
   const [selection, setSelection] = useState<Selection>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [metadataOpen, setMetadataOpen] = useState(false);
   const imageImport = useImageImport();
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: version drives re-serialize after in-place mutations
@@ -168,6 +177,20 @@ export function Editor() {
   const editable = useMemo(
     () => isEditableDocument(documentRef.current),
     [version],
+  );
+
+  // Score-level metadata, re-read from the live document on each commit. Cheap,
+  // so recomputed eagerly rather than only when the dialog opens.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: version tracks the live document
+  const metadata = useMemo(() => readMetadata(documentRef.current), [version]);
+
+  const onSaveMetadata = useCallback(
+    (values: EditableMetadata) => {
+      writeMetadata(documentRef.current, values);
+      setMetadataOpen(false);
+      commit();
+    },
+    [documentRef, commit],
   );
 
   const listen = useListen(score);
@@ -672,8 +695,13 @@ export function Editor() {
         return;
       }
       let imported: string | null;
+      // Provenance method for the conversions; native MusicXML/MXL is left
+      // unstamped so a faithful file round-trips byte-for-byte.
+      let importMethod: "optical-music-recognition" | "midi-conversion" | null =
+        null;
       if (isImportableImage(file)) {
         imported = await imageImport.importImage(file);
+        importMethod = "optical-music-recognition";
       } else if (isMxl(file)) {
         const bytes = new Uint8Array(await file.arrayBuffer());
         imported = await extractMusicXmlFromMxl(bytes);
@@ -682,13 +710,22 @@ export function Editor() {
         const parsed = parseMidi(bytes);
         const trackIndices = getMidiTracks(parsed).map((t) => t.index);
         imported = midiToMusicXmlWithTracks(parsed, trackIndices);
+        importMethod = "midi-conversion";
       } else {
         imported = await file.text();
       }
       if (imported === null) {
         return;
       }
-      history.reset(parseDocument(imported));
+      const doc = parseDocument(imported);
+      // Stamp how/when/from-what the document was imported (conversions only).
+      if (importMethod) {
+        stampImportProvenance(doc, {
+          method: importMethod,
+          sourceFile: file.name,
+        });
+      }
+      history.reset(doc);
       setSelection(null);
       setMenu(null);
     },
@@ -880,6 +917,13 @@ export function Editor() {
         ) : null}
         <button
           type="button"
+          onClick={() => setMetadataOpen(true)}
+          style={toolbarButtonStyle(true)}
+        >
+          Metadata
+        </button>
+        <button
+          type="button"
           onClick={onExport}
           style={toolbarButtonStyle(true)}
         >
@@ -951,21 +995,28 @@ export function Editor() {
           style={{
             flex: 1,
             minWidth: 0,
+            display: "flex",
+            flexDirection: "column",
             background: COLORS.canvas,
-            padding: 8,
             boxSizing: "border-box",
           }}
         >
-          <EditableSheetMusic
-            musicxml={musicxml}
-            noteHighlights={noteHighlights}
-            onTap={handleTap}
-            onContextMenu={handleContextMenu}
-            accentColor={COLORS.accent}
-            getLiveBeat={listen.getLiveBeat}
-            isPlaying={listen.playing}
-            scrollLocked={listen.playing}
+          <ScoreHeader
+            metadata={metadata}
+            onEdit={() => setMetadataOpen(true)}
           />
+          <div style={{ flex: 1, minHeight: 0, padding: 8 }}>
+            <EditableSheetMusic
+              musicxml={musicxml}
+              noteHighlights={noteHighlights}
+              onTap={handleTap}
+              onContextMenu={handleContextMenu}
+              accentColor={COLORS.accent}
+              getLiveBeat={listen.getLiveBeat}
+              isPlaying={listen.playing}
+              scrollLocked={listen.playing}
+            />
+          </div>
         </div>
         <Inspector
           model={inspector?.model ?? null}
@@ -1038,6 +1089,15 @@ export function Editor() {
           y={menu.y}
           items={menuItems}
           onClose={() => setMenu(null)}
+        />
+      ) : null}
+
+      {metadataOpen ? (
+        <MetadataDialog
+          metadata={metadata}
+          editable={true}
+          onSave={onSaveMetadata}
+          onClose={() => setMetadataOpen(false)}
         />
       ) : null}
     </div>
