@@ -26,15 +26,14 @@ function measureCount(xml: string): number {
   return (xml.match(/<measure /g) ?? []).length;
 }
 
-// The inspector's first pitch-label button (text like "E5" / "F♯5") — used
-// pitch-agnostically since which beat a notehead click resolves to depends on
-// the renderer's hit-test geometry.
-function pitchButton(page: Page) {
-  return page
+// The inspector's pitch-label button for a specific pitch string (e.g. "C5",
+// "F♯5"). Unique within the panel when only one note is selected.
+function pitchButton(page: Page, label?: string) {
+  const buttons = page
     .locator("aside")
     .getByRole("button")
-    .filter({ hasText: /^[A-G][♯♭]*\d$/ })
-    .first();
+    .filter({ hasText: /^[A-G][♯♭]*\d$/ });
+  return label ? buttons.filter({ hasText: label }) : buttons.first();
 }
 
 // Load the single-staff fixture (three quarter notes C5/E5/G5) and wait for it.
@@ -59,11 +58,11 @@ test("clicking selects the beat; a second click drills to the note", async ({
   await expect(inspector.getByText(/click a beat/i)).toBeVisible();
 
   // First click on a notehead selects its beat (Level 1); the header names the
-  // time-position and the chord's note is listed.
+  // time-position and the chord's note is listed with the exact pitch label.
   await page.locator("#p0-m1-n0-v0").click();
   await expect(inspector.getByText("Beat", { exact: true })).toBeVisible();
   await expect(inspector.getByText(/Measure 1 .* Beat \d/)).toBeVisible();
-  await expect(pitchButton(page)).toBeVisible();
+  await expect(pitchButton(page, "C5")).toBeVisible();
 
   // A second click on the same notehead narrows to that one note (Level 2).
   await page.locator("#p0-m1-n0-v0").click();
