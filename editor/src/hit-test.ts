@@ -261,26 +261,6 @@ export function chordForHandle(
   return null;
 }
 
-// The chord whose onset is closest to `beat`, within `tolerance` quarter-note
-// beats — used to resolve a right-click (which carries a beat but no pitch) to
-// a selection. Returns null when no chord is near enough.
-export function chordAtBeat(
-  score: ParsedScore,
-  beat: number,
-  tolerance = 1.5,
-): ChordSelection | null {
-  let best: ChordSelection | null = null;
-  let bestDistance = Number.POSITIVE_INFINITY;
-  for (const chord of pickableChords(score)) {
-    const distance = Math.abs(chord.onsetBeat - beat);
-    if (distance < bestDistance) {
-      bestDistance = distance;
-      best = chord;
-    }
-  }
-  return best && bestDistance <= tolerance ? best : null;
-}
-
 // The pitch of the note a handle refers to, or null if it no longer resolves.
 export function pitchForHandle(
   score: ParsedScore,
@@ -372,11 +352,6 @@ function pickableChordInfos(score: ParsedScore): ChordInfo[] {
   return result;
 }
 
-// Every selectable beat in onset order — used for ←/→ beat navigation.
-export function chordInfos(score: ParsedScore): ChordInfo[] {
-  return pickableChordInfos(score);
-}
-
 // The rich chord info for the beat a known note belongs to, or null if the
 // handle no longer resolves.
 export function chordInfoForHandle(
@@ -412,8 +387,120 @@ export function chordInfoAtBeat(
 // Top-first (descending pitch) ordering of a chord's notes — the single helper
 // the inspector rows and any note-cycling must share so list order and on-score
 // positions stay aligned (per the handoff's State Management note).
-export function topFirstNotes(info: ChordInfo): ChordNote[] {
+export function topFirstNotes(info: { notes: ChordNote[] }): ChordNote[] {
   return [...info.notes].sort(
     (a, b) => diatonicIndex(b.pitch) - diatonicIndex(a.pitch),
   );
+}
+
+// ── Spine slots (rest-inclusive positions) ────────────────────────────────────
+
+// One position on the rhythm spine — a chord OR a rest. Selection is
+// slot-centric: a click (or ←/→) lands on a slot regardless of whether a note
+// sounds there, so rests are selectable and an empty measure has one slot. A
+// rest slot carries no notes/handles; its `type` is the rest's duration value.
+export interface SlotInfo {
+  measureIndex: number;
+  onsetBeat: number;
+  isRest: boolean;
+  /** Duration value of the rest or chord (for the inspector's duration label). */
+  type: NoteType;
+  /** Chord members, top-first ordering applied by the caller; empty for a rest. */
+  notes: ChordNote[];
+  /** Source handles of the chord's notes; empty for a rest. */
+  handles: NoteHandle[];
+}
+
+// Enumerate every slot (chord and rest) in onset order across all measures.
+// Mirrors `pickableChordInfos`' beat-cursor walk but emits a slot for rests too.
+function pickableSlots(score: ParsedScore): SlotInfo[] {
+  const measureStartBeats = computeMeasureStartBeats(score);
+  const result: SlotInfo[] = [];
+  score.parts.forEach((part, partIndex) => {
+    part.measures.forEach((measure, measureIndex) => {
+      let beatCursor = measureStartBeats[measureIndex] ?? 0;
+      const divisions = measure.divisions || 4;
+      for (const event of measure.events) {
+        if (isRest(event)) {
+          result.push({
+            measureIndex,
+            onsetBeat: beatCursor,
+            isRest: true,
+            type: event.type,
+            notes: [],
+            handles: [],
+          });
+          beatCursor += event.duration / divisions;
+          continue;
+        }
+        const group = event as ChordGroup;
+        const notes: ChordNote[] = [];
+        group.notes.forEach((note, voiceIndex) => {
+          if (!note.source) {
+            return;
+          }
+          notes.push({
+            id: `p${partIndex}-m${measure.number}-n${group.noteIndex}-v${voiceIndex}`,
+            handle: note.source,
+            pitch: note.pitch,
+          });
+        });
+        result.push({
+          measureIndex,
+          onsetBeat: beatCursor,
+          isRest: false,
+          type: group.type,
+          notes,
+          handles: notes.map((note) => note.handle),
+        });
+        beatCursor += group.duration / divisions;
+      }
+    });
+  });
+  return result;
+}
+
+// Every slot in onset order — drives ←/→ navigation, including rests and empty
+// measures (not just note onsets).
+export function slots(score: ParsedScore): SlotInfo[] {
+  return pickableSlots(score);
+}
+
+// Re-resolve a selected slot (a position) to fresh data after an edit. Matched
+// by measure + onset beat so it survives rebuilds — including rests, which carry
+// no handle.
+export function slotAt(
+  score: ParsedScore,
+  measureIndex: number,
+  onsetBeat: number,
+): SlotInfo | null {
+  for (const slot of pickableSlots(score)) {
+    if (
+      slot.measureIndex === measureIndex &&
+      Math.abs(slot.onsetBeat - onsetBeat) < 1e-6
+    ) {
+      return slot;
+    }
+  }
+  return null;
+}
+
+// The slot whose onset is nearest `beat`, within `tolerance` quarter-note beats.
+// The rest-aware counterpart of `chordInfoAtBeat`: a click snapped by `beatFromX`
+// to a spine onset lands exactly on its slot.
+export function slotAtBeat(
+  score: ParsedScore,
+  beat: number,
+  tolerance = 1.5,
+): SlotInfo | null {
+  let best: SlotInfo | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const slot of pickableSlots(score)) {
+    const distance = Math.abs(slot.onsetBeat - beat);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = slot;
+    }
+  }
+  return best && bestDistance <= tolerance ? best : null;
 }

@@ -7,13 +7,15 @@ import {
 } from "./dom-edit";
 import {
   beatFromX,
-  chordAtBeat,
   chordForHandle,
   idForHandle,
   locateBeat,
   pickNote,
   pitchForHandle,
   pitchFromY,
+  slotAt,
+  slotAtBeat,
+  slots,
   stepPitch,
 } from "./hit-test";
 import {
@@ -177,19 +179,51 @@ describe("chordForHandle", () => {
   });
 });
 
-describe("chordAtBeat", () => {
-  test("returns the chord whose onset is nearest the beat", () => {
+describe("slots", () => {
+  test("a blank document has one rest slot per empty measure", () => {
+    const score = parseScore(serializeDocument(createBlankDocument()));
+    const list = slots(score);
+    // createBlankDocument defaults to 4 measures, each a full-measure rest.
+    expect(list.length).toBe(4);
+    expect(list.map((slot) => slot.onsetBeat)).toEqual([0, 4, 8, 12]);
+    expect(list.every((slot) => slot.isRest)).toBe(true);
+    expect(list.every((slot) => slot.handles.length === 0)).toBe(true);
+  });
+
+  test("enumerates rests between notes, in onset order", () => {
+    // Quarter notes at beats 0 and 2 of measure 1 leave quarter rests at 1 and 3.
     const { score } = scoreWithNotes([
       { onset: 0, step: "C", octave: 5 },
       { onset: 2, step: "G", octave: 5 },
     ]);
-    expect(chordAtBeat(score, 1.9)?.onsetBeat).toBe(2);
-    expect(chordAtBeat(score, 0.2)?.onsetBeat).toBe(0);
+    const firstMeasure = slots(score).filter((slot) => slot.measureIndex === 0);
+    expect(
+      firstMeasure.map((slot) => ({ beat: slot.onsetBeat, rest: slot.isRest })),
+    ).toEqual([
+      { beat: 0, rest: false },
+      { beat: 1, rest: true },
+      { beat: 2, rest: false },
+      { beat: 3, rest: true },
+    ]);
+  });
+});
+
+describe("slotAt / slotAtBeat", () => {
+  test("slotAtBeat resolves a rest position between notes", () => {
+    const { score } = scoreWithNotes([
+      { onset: 0, step: "C", octave: 5 },
+      { onset: 2, step: "G", octave: 5 },
+    ]);
+    const slot = slotAtBeat(score, 1);
+    expect(slot?.isRest).toBe(true);
+    expect(slot?.onsetBeat).toBe(1);
   });
 
-  test("returns null when nothing is within tolerance", () => {
+  test("slotAt resolves a slot by its position", () => {
     const { score } = scoreWithNotes([{ onset: 0, step: "C", octave: 5 }]);
-    expect(chordAtBeat(score, 3.5)).toBeNull();
+    expect(slotAt(score, 0, 0)?.isRest).toBe(false);
+    expect(slotAt(score, 0, 1)?.isRest).toBe(true);
+    expect(slotAt(score, 0, 0.5)).toBeNull();
   });
 });
 

@@ -11,8 +11,8 @@ import { expect, type Locator, type Page, test } from "@playwright/test";
 //   - a click in the gap between two notes snaps to the nearer onset;
 //   - a click off the notehead vertically still highlights the note at that beat
 //     (the onset anchors the pick — pitch only breaks ties);
-//   - a click on a rest (which carries no notehead) highlights nothing — there
-//     is currently no way to select or insert onto a rest by clicking.
+//   - a click on a rest selects that rest's spine slot (no notehead is tinted,
+//     but the inspector shows the rest position) — rests are selectable.
 
 const SINGLE_STAFF = fileURLToPath(
   new URL("./fixtures/single-staff.musicxml", import.meta.url),
@@ -74,12 +74,18 @@ async function expectSelected(
   );
 }
 
-async function expectNoSelection(page: Page): Promise<void> {
+// Assert a rest slot is selected: the inspector names its position and shows the
+// rest (no pitch rows), and no notehead is tinted on the score.
+async function expectRestSelected(
+  page: Page,
+  expected: { beat: number; duration: string },
+): Promise<void> {
+  const aside = page.locator("aside");
   await expect(
-    page.locator("aside").getByText("Click a beat on the score to select it."),
+    aside.getByText(`Measure 1 · Beat ${expected.beat}`),
   ).toBeVisible();
+  await expect(aside.getByText(`Rest · ${expected.duration}`)).toBeVisible();
   await expect(pitchButtons(page)).toHaveCount(0);
-  // No note is highlighted on the score either.
   await expect(page.locator("g[data-color-id]")).toHaveCount(0);
 }
 
@@ -143,20 +149,18 @@ test("clicking off a notehead vertically still highlights the note at that beat"
   await expectSelected(page, { beat: 2, label: "E5", noteId: "p0-m1-n1-v0" });
 });
 
-test("clicking a rest highlights nothing (rests are not selectable)", async ({
-  page,
-}) => {
+test("clicking a rest selects the rest slot", async ({ page }) => {
   await loadSingleStaff(page);
   const c1 = await noteheadCenter(page, "#p0-m1-n1-v0"); // E5, beat 2
   const c2 = await noteheadCenter(page, "#p0-m1-n2-v0"); // G5, beat 3
   const beatSpan = c2.x - c1.x;
 
-  // Select G5 first so the next click has a selection to clear.
+  // Select G5 first to show the selection then moves to the rest.
   await page.mouse.click(c2.x, c2.y);
   await expectSelected(page, { beat: 3, label: "G5", noteId: "p0-m1-n2-v0" });
 
   // Beat 4 is a quarter rest with no notehead. A click there snaps to the rest's
-  // onset, where no real note is within tolerance, so the selection clears.
+  // spine slot and selects it — no note is tinted, but the rest is now selected.
   await page.mouse.click(c2.x + beatSpan, c2.y);
-  await expectNoSelection(page);
+  await expectRestSelected(page, { beat: 4, duration: "quarter" });
 });

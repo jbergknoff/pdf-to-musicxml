@@ -28,6 +28,7 @@ import {
   writeMetadata,
 } from "./metadata";
 import {
+  addNote,
   addNoteToChord,
   createBlankDocument,
   insertMeasure,
@@ -40,15 +41,15 @@ import {
   setAccidental,
 } from "./dom-edit";
 import {
-  chordAtBeat,
-  type ChordSelection,
   chordForHandle,
-  type ChordInfo,
   chordInfoForHandle,
-  chordInfos,
   idForHandle,
   octavePitch,
   pitchForHandle,
+  type SlotInfo,
+  slotAt,
+  slotAtBeat,
+  slots,
   stepPitch,
   topFirstNotes,
 } from "./hit-test";
@@ -87,10 +88,12 @@ function isMidi(file: File): boolean {
 const FOCUS_COLOR = COLORS.accent;
 const CHORD_TINT = "#84a9e8";
 
-// The current selection: either a whole chord (Level 1) or one focused note
-// (Level 2). Both follow their notes across edits via the stable handles.
+// The current selection: either a whole spine slot (Level 1) — a position that
+// may hold a chord OR a rest — or one focused note within a chord (Level 2). A
+// slot is identified by its position (measure + onset beat) so it survives edits
+// even when it holds no note (a rest carries no handle).
 type Selection =
-  | { kind: "chord"; chord: ChordSelection }
+  | { kind: "slot"; measureIndex: number; onsetBeat: number }
   | { kind: "note"; handle: NoteHandle }
   | null;
 
@@ -101,18 +104,64 @@ function sameHandle(a: NoteHandle, b: NoteHandle): boolean {
   );
 }
 
+function sameSlot(
+  selection: Selection,
+  slot: { measureIndex: number; onsetBeat: number },
+): boolean {
+  return (
+    selection?.kind === "slot" &&
+    selection.measureIndex === slot.measureIndex &&
+    Math.abs(selection.onsetBeat - slot.onsetBeat) < 1e-6
+  );
+}
+
 // The single-note target for nudges/accidentals: an explicitly focused note, or
-// a chord that holds exactly one note.
-function focusedHandle(selection: Selection): NoteHandle | null {
-  if (!selection) {
-    return null;
-  }
-  if (selection.kind === "note") {
+// a chord slot that holds exactly one note. A rest slot has no target.
+function focusedHandle(
+  selection: Selection,
+  slot: SlotInfo | null,
+): NoteHandle | null {
+  if (selection?.kind === "note") {
     return selection.handle;
   }
-  return selection.chord.handles.length === 1
-    ? selection.chord.handles[0]
-    : null;
+  if (slot && !slot.isRest && slot.handles.length === 1) {
+    return slot.handles[0];
+  }
+  return null;
+}
+
+const STEPS_ORDER: Pitch["step"][] = ["C", "D", "E", "F", "G", "A", "B"];
+
+// A new note added onto a rest is placed near the staff's middle line for the
+// active clef (B4 treble, D3 bass) so it lands on the staff rather than far
+// above/below — the user nudges from there with ↑/↓.
+function staffReferencePitch(clef: { sign: "G" | "F" } | undefined): Pitch {
+  return clef?.sign === "F"
+    ? { step: "D", alter: 0, octave: 3 }
+    : { step: "B", alter: 0, octave: 4 };
+}
+
+// Place a chosen letter (A–G) at the octave that lands it nearest the staff's
+// middle line for the clef — so typing "C" onto an empty treble bar gives C5,
+// not C4 far below.
+function placeLetterNearStaff(
+  step: Pitch["step"],
+  clef: { sign: "G" | "F" } | undefined,
+): Pitch {
+  const reference = staffReferencePitch(clef);
+  const referenceDiatonic =
+    reference.octave * 7 + STEPS_ORDER.indexOf(reference.step);
+  const stepIndex = STEPS_ORDER.indexOf(step);
+  let best = Math.round((referenceDiatonic - stepIndex) / 7);
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const octave of [best - 1, best, best + 1]) {
+    const distance = Math.abs(octave * 7 + stepIndex - referenceDiatonic);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = octave;
+    }
+  }
+  return { step, alter: 0, octave: best };
 }
 
 // A pitch's display accidental for the inspector label.
@@ -195,36 +244,46 @@ export function Editor() {
 
   const listen = useListen(score);
 
-  // The rich chord info for the current selection (notes + duration type).
-  const chordInfo: ChordInfo | null = useMemo(() => {
+  // The slot (chord or rest) for the current selection. A slot selection
+  // resolves by position; a drilled note resolves via its chord's onset.
+  const slotInfo: SlotInfo | null = useMemo(() => {
     if (!selection) {
       return null;
     }
-    const handle =
-      selection.kind === "note" ? selection.handle : selection.chord.handles[0];
-    return handle ? chordInfoForHandle(score, handle) : null;
+    if (selection.kind === "slot") {
+      return slotAt(score, selection.measureIndex, selection.onsetBeat);
+    }
+    const info = chordInfoForHandle(score, selection.handle);
+    return info ? slotAt(score, info.measureIndex, info.onsetBeat) : null;
   }, [selection, score]);
 
+  // The single-note target for nudges/accidentals (null on a rest slot).
+  const focused = useMemo(
+    () => focusedHandle(selection, slotInfo),
+    [selection, slotInfo],
+  );
+
   // The inspector model + the parallel top-first handle list it indexes into.
+  // A rest slot yields an empty note list, which the Inspector renders as
+  // "Rest · {type}" with an Add-note affordance.
   const inspector = useMemo<{
     model: InspectorModel;
     handles: NoteHandle[];
   } | null>(() => {
-    if (!chordInfo) {
+    if (!slotInfo) {
       return null;
     }
-    const rows = topFirstNotes(chordInfo);
-    const focused = focusedHandle(selection);
-    const measureStart = measureStartBeats[chordInfo.measureIndex] ?? 0;
+    const rows = topFirstNotes(slotInfo);
+    const measureStart = measureStartBeats[slotInfo.measureIndex] ?? 0;
     const beatType = score.parts[0]?.timeSig?.beatType ?? 4;
     const beatNumber =
-      Math.round((chordInfo.onsetBeat - measureStart) * (beatType / 4)) + 1;
+      Math.round((slotInfo.onsetBeat - measureStart) * (beatType / 4)) + 1;
     return {
       model: {
         level: selection?.kind === "note" ? "note" : "beat",
-        measureNumber: chordInfo.measureIndex + 1,
+        measureNumber: slotInfo.measureIndex + 1,
         beatNumber,
-        durationLabel: chordInfo.type,
+        durationLabel: slotInfo.type,
         notes: rows.map((row) => ({
           key: row.id,
           label: pitchLabel(row.pitch),
@@ -234,44 +293,42 @@ export function Editor() {
       },
       handles: rows.map((row) => row.handle),
     };
-  }, [chordInfo, selection, score, measureStartBeats]);
+  }, [slotInfo, focused, selection, score, measureStartBeats]);
 
-  // Selection highlights: the focused note draws strong, chord-mates light.
+  // Selection highlights: at Level 2 the focused note draws strong and its
+  // chord-mates light; a slot selection tints all its members (none for a rest —
+  // the beat-box chrome marks a rest instead).
   const noteHighlights: NoteHighlight[] = useMemo(() => {
-    if (!selection) {
+    if (!selection || !slotInfo) {
       return [];
     }
     if (selection.kind === "note") {
-      if (chordInfo) {
-        const out: NoteHighlight[] = [];
-        for (const note of chordInfo.notes) {
-          const id = idForHandle(score, note.handle);
-          if (id) {
-            out.push({
-              kind: "score",
-              id,
-              color: sameHandle(note.handle, selection.handle)
-                ? FOCUS_COLOR
-                : CHORD_TINT,
-            });
-          }
+      const out: NoteHighlight[] = [];
+      for (const note of slotInfo.notes) {
+        const id = idForHandle(score, note.handle);
+        if (id) {
+          out.push({
+            kind: "score",
+            id,
+            color: sameHandle(note.handle, selection.handle)
+              ? FOCUS_COLOR
+              : CHORD_TINT,
+          });
         }
-        return out;
       }
-      const id = idForHandle(score, selection.handle);
-      return id ? [{ kind: "score", id, color: FOCUS_COLOR }] : [];
+      return out;
     }
-    return selection.chord.handles
-      .map((handle) => idForHandle(score, handle))
+    return slotInfo.notes
+      .map((note) => idForHandle(score, note.handle))
       .filter((id): id is string => id !== null)
       .map((id) => ({ kind: "score", id, color: CHORD_TINT }));
-  }, [selection, score, chordInfo]);
+  }, [selection, score, slotInfo]);
 
   const hasSelection = selection !== null;
 
   // Selection chrome geometry: the beat column to highlight and (at Level 2) the
   // specific note to ring. Both are passed straight through to the renderer.
-  const selectionBeat = chordInfo?.onsetBeat ?? null;
+  const selectionBeat = slotInfo?.onsetBeat ?? null;
   const focusNoteId = useMemo(() => {
     if (selection?.kind !== "note") {
       return null;
@@ -279,35 +336,34 @@ export function Editor() {
     return idForHandle(score, selection.handle) ?? null;
   }, [selection, score]);
 
-  // Tap on the staff: select the chord at that beat, then narrow to one note on
-  // a repeat tap (or a direct notehead tap). A tap on empty space clears the
-  // selection — it never inserts a note.
+  // Tap on the staff: select the spine slot (chord or rest) at that beat, then
+  // narrow to one note on a repeat tap on a notehead. A tap that resolves to no
+  // slot (off the staff) clears the selection — it never inserts a note.
   const handleTap = useCallback(
     (gesture: EditorGesture) => {
       setMenu(null);
       if (!editable) {
         return;
       }
-      if (!gesture.hit) {
+      const slot = slotAtBeat(score, gesture.beat);
+      if (!slot) {
         setSelection(null);
         return;
       }
-      const picked = gesture.hit.handle;
-      const chord = chordForHandle(score, picked);
-      if (!chord) {
-        setSelection({ kind: "note", handle: picked });
-        return;
-      }
       setSelection((prev) => {
-        const alreadyHere =
-          (prev?.kind === "chord" &&
-            prev.chord.measureIndex === chord.measureIndex &&
-            prev.chord.onsetBeat === chord.onsetBeat) ||
+        const onThisSlot =
+          sameSlot(prev, slot) ||
           (prev?.kind === "note" &&
-            chord.handles.some((handle) => sameHandle(handle, prev.handle)));
-        return alreadyHere
-          ? { kind: "note", handle: picked }
-          : { kind: "chord", chord };
+            slot.handles.some((handle) => sameHandle(handle, prev.handle)));
+        // A repeat tap that landed on a notehead drills into that note.
+        if (onThisSlot && gesture.hit) {
+          return { kind: "note", handle: gesture.hit.handle };
+        }
+        return {
+          kind: "slot",
+          measureIndex: slot.measureIndex,
+          onsetBeat: slot.onsetBeat,
+        };
       });
     },
     [editable, score],
@@ -318,19 +374,23 @@ export function Editor() {
       if (!editable) {
         return;
       }
-      const chord = chordAtBeat(score, request.beat);
-      if (!chord) {
+      const slot = slotAtBeat(score, request.beat);
+      if (!slot) {
         setMenu(null);
         return;
       }
       setSelection((prev) => {
         if (
           prev?.kind === "note" &&
-          chord.handles.some((handle) => sameHandle(handle, prev.handle))
+          slot.handles.some((handle) => sameHandle(handle, prev.handle))
         ) {
           return prev;
         }
-        return { kind: "chord", chord };
+        return {
+          kind: "slot",
+          measureIndex: slot.measureIndex,
+          onsetBeat: slot.onsetBeat,
+        };
       });
       setMenu({ x: request.clientX, y: request.clientY });
     },
@@ -382,37 +442,74 @@ export function Editor() {
     [editable, documentRef, commit],
   );
 
+  // Re-select the slot at `onsetBeat` after a mutation, resolving against the
+  // freshly serialized document so positions/handles are current. Used after a
+  // removal so the position stays selected (it becomes a rest, or the remaining
+  // chord).
+  const reselectSlotAt = useCallback(
+    (onsetBeat: number | null) => {
+      if (onsetBeat === null) {
+        setSelection(null);
+        return;
+      }
+      const freshScore = parseScore(serializeDocument(documentRef.current));
+      const slot = slotAtBeat(freshScore, onsetBeat, 0.1);
+      setSelection(
+        slot
+          ? {
+              kind: "slot",
+              measureIndex: slot.measureIndex,
+              onsetBeat: slot.onsetBeat,
+            }
+          : null,
+      );
+    },
+    [documentRef],
+  );
+
   const removeHandle = useCallback(
     (handle: NoteHandle) => {
       if (!editable) {
         return;
       }
-      const chord = chordForHandle(score, handle);
-      const wasMultiNote = chord !== null && chord.handles.length > 1;
-      const onsetBeat = chord?.onsetBeat ?? null;
+      const info = chordInfoForHandle(score, handle);
+      const onsetBeat = info?.onsetBeat ?? null;
       removeNotes(documentRef.current, [handle]);
       setMenu(null);
       commit();
-      if (wasMultiNote && onsetBeat !== null) {
-        // Re-resolve from the freshly mutated document so handle indices are correct.
-        const freshScore = parseScore(serializeDocument(documentRef.current));
-        const remaining = chordAtBeat(freshScore, onsetBeat, 0.1);
-        setSelection(remaining ? { kind: "chord", chord: remaining } : null);
-      } else {
-        setSelection(null);
-      }
+      reselectSlotAt(onsetBeat);
     },
-    [editable, score, documentRef, commit],
+    [editable, score, documentRef, commit, reselectSlotAt],
   );
 
-  const addNoteToCurrent = useCallback(
+  // Add a note at the current slot. On a chord slot it stacks a chord member
+  // (default a third above the top, via `addNoteToChord`); on a rest slot it
+  // inserts a quarter note, leaving the remainder of the rest as rests
+  // (`addNote` fits the duration to the gap and rebalances). `pitch` is required
+  // for a rest (no existing note to default from).
+  const addNoteAtSlot = useCallback(
     (pitch?: Pitch) => {
-      if (!editable || !chordInfo) {
+      if (!editable || !slotInfo) {
+        return;
+      }
+      if (slotInfo.isRest) {
+        const clef = score.parts[0]?.clef;
+        const measureStart = measureStartBeats[slotInfo.measureIndex] ?? 0;
+        const added = addNote(documentRef.current, {
+          measureIndex: slotInfo.measureIndex,
+          onsetBeatInMeasure: slotInfo.onsetBeat - measureStart,
+          durationBeats: 1,
+          pitch: pitch ?? staffReferencePitch(clef),
+        });
+        if (added) {
+          setSelection({ kind: "note", handle: added });
+          commit();
+        }
         return;
       }
       const added = addNoteToChord(
         documentRef.current,
-        chordInfo.notes[0].handle,
+        slotInfo.notes[0].handle,
         pitch,
       );
       if (added) {
@@ -420,53 +517,64 @@ export function Editor() {
         commit();
       }
     },
-    [editable, chordInfo, documentRef, commit],
+    [editable, slotInfo, score, measureStartBeats, documentRef, commit],
   );
 
   const addLetter = useCallback(
     (step: Pitch["step"]) => {
-      if (!chordInfo) {
+      if (!slotInfo) {
         return;
       }
-      const top = topFirstNotes(chordInfo)[0].pitch;
-      addNoteToCurrent({ step, alter: 0, octave: top.octave });
+      if (slotInfo.isRest) {
+        addNoteAtSlot(placeLetterNearStaff(step, score.parts[0]?.clef));
+      } else {
+        const top = topFirstNotes(slotInfo)[0].pitch;
+        addNoteAtSlot({ step, alter: 0, octave: top.octave });
+      }
     },
-    [chordInfo, addNoteToCurrent],
+    [slotInfo, score, addNoteAtSlot],
   );
 
   const onInsertMeasure = useCallback(() => {
     if (!editable) {
       return;
     }
-    insertMeasure(documentRef.current, chordInfo?.measureIndex);
+    insertMeasure(documentRef.current, slotInfo?.measureIndex);
     setSelection(null);
     setMenu(null);
     commit();
-  }, [editable, chordInfo, documentRef, commit]);
+  }, [editable, slotInfo, documentRef, commit]);
 
   const deleteSelection = useCallback(() => {
-    if (!selection) {
+    if (!selection || !slotInfo) {
       return;
     }
     const handles =
-      selection.kind === "note" ? [selection.handle] : selection.chord.handles;
+      selection.kind === "note" ? [selection.handle] : slotInfo.handles;
+    if (handles.length === 0) {
+      // A rest slot has nothing to delete.
+      return;
+    }
+    const onsetBeat = slotInfo.onsetBeat;
     removeNotes(documentRef.current, handles);
-    setSelection(null);
     setMenu(null);
     commit();
-  }, [commit, documentRef, selection]);
+    reselectSlotAt(onsetBeat);
+  }, [commit, documentRef, selection, slotInfo, reselectSlotAt]);
 
   // ── Selection navigation (keyboard) ─────────────────────────────────────────
 
   const drillIn = useCallback(() => {
     setSelection((prev) => {
-      if (prev?.kind !== "chord") {
+      if (prev?.kind !== "slot") {
         return prev;
       }
-      const info = chordInfoForHandle(score, prev.chord.handles[0]);
-      return info
-        ? { kind: "note", handle: topFirstNotes(info)[0].handle }
-        : prev;
+      const slot = slotAt(score, prev.measureIndex, prev.onsetBeat);
+      // A rest slot has no note to drill into.
+      if (!slot || slot.isRest || slot.notes.length === 0) {
+        return prev;
+      }
+      return { kind: "note", handle: topFirstNotes(slot)[0].handle };
     });
   }, [score]);
 
@@ -479,12 +587,9 @@ export function Editor() {
       const info = chordInfoForHandle(score, prev.handle);
       return info
         ? {
-            kind: "chord",
-            chord: {
-              measureIndex: info.measureIndex,
-              onsetBeat: info.onsetBeat,
-              handles: info.notes.map((note) => note.handle),
-            },
+            kind: "slot",
+            measureIndex: info.measureIndex,
+            onsetBeat: info.onsetBeat,
           }
         : null;
     });
@@ -515,9 +620,12 @@ export function Editor() {
     [score],
   );
 
+  // ←/→: move to the adjacent spine slot. Walks every slot (rests and empty
+  // measures included), not just note onsets — the core "next spot on the spine"
+  // behavior. Clamps at the piece ends.
   const navBeat = useCallback(
     (dir: number) => {
-      const list = chordInfos(score);
+      const list = slots(score);
       if (list.length === 0) {
         return;
       }
@@ -526,27 +634,28 @@ export function Editor() {
         if (!prev) {
           index = dir > 0 ? 0 : list.length - 1;
         } else {
-          const handle =
-            prev.kind === "note" ? prev.handle : prev.chord.handles[0];
-          const current = list.findIndex((info) =>
-            info.notes.some((note) => sameHandle(note.handle, handle)),
-          );
+          const current =
+            prev.kind === "note"
+              ? list.findIndex((slot) =>
+                  slot.handles.some((handle) =>
+                    sameHandle(handle, prev.handle),
+                  ),
+                )
+              : list.findIndex((slot) => sameSlot(prev, slot));
           index = current < 0 ? (dir > 0 ? 0 : list.length - 1) : current + dir;
         }
         if (index < 0 || index >= list.length) {
           return prev; // clamp at the ends
         }
         const next = list[index];
-        if (prev?.kind === "note") {
+        // Stay drilled to a note only when the destination actually holds one.
+        if (prev?.kind === "note" && !next.isRest && next.notes.length > 0) {
           return { kind: "note", handle: topFirstNotes(next)[0].handle };
         }
         return {
-          kind: "chord",
-          chord: {
-            measureIndex: next.measureIndex,
-            onsetBeat: next.onsetBeat,
-            handles: next.notes.map((note) => note.handle),
-          },
+          kind: "slot",
+          measureIndex: next.measureIndex,
+          onsetBeat: next.onsetBeat,
         };
       });
     },
@@ -567,17 +676,16 @@ export function Editor() {
 
   const accidentalOnFocus = useCallback(
     (alter: number) => {
-      const handle = focusedHandle(selection);
-      if (handle) {
-        setAccidentalOn(handle, alter);
+      if (focused) {
+        setAccidentalOn(focused, alter);
       }
     },
-    [selection, setAccidentalOn],
+    [focused, setAccidentalOn],
   );
 
   const onListen = useCallback(() => {
-    listen.toggle(chordInfo?.onsetBeat);
-  }, [listen, chordInfo]);
+    listen.toggle(slotInfo?.onsetBeat);
+  }, [listen, slotInfo]);
 
   const undo = useCallback(() => {
     history.undo();
@@ -774,14 +882,14 @@ export function Editor() {
   }, [history, musicxml]);
 
   // Context-menu items act on the current selection.
-  const canNudge = focusedHandle(selection) !== null;
+  const canNudge = focused !== null;
+  const canDelete = hasSelection && (slotInfo ? !slotInfo.isRest : true);
   const menuItems: ContextMenuItem[] = [
     {
       label: "Move up",
       onSelect: () => {
-        const handle = focusedHandle(selection);
-        if (handle) {
-          stepHandle(handle, 1, false);
+        if (focused) {
+          stepHandle(focused, 1, false);
         }
       },
       disabled: !canNudge,
@@ -789,19 +897,18 @@ export function Editor() {
     {
       label: "Move down",
       onSelect: () => {
-        const handle = focusedHandle(selection);
-        if (handle) {
-          stepHandle(handle, -1, false);
+        if (focused) {
+          stepHandle(focused, -1, false);
         }
       },
       disabled: !canNudge,
     },
     {
       label: "Add note",
-      onSelect: () => addNoteToCurrent(),
-      disabled: !chordInfo,
+      onSelect: () => addNoteAtSlot(),
+      disabled: !slotInfo,
     },
-    { label: "Delete", onSelect: deleteSelection, disabled: !hasSelection },
+    { label: "Delete", onSelect: deleteSelection, disabled: !canDelete },
   ];
 
   // Accidental toolbar buttons act on the drilled note.
@@ -821,10 +928,12 @@ export function Editor() {
       fontSize: 15,
     }) as const;
 
-  const selectionReadout = chordInfo
-    ? `Sel: m.${chordInfo.measureIndex + 1} · ${chordInfo.notes.length} ${
-        chordInfo.notes.length === 1 ? "note" : "notes"
-      }`
+  const selectionReadout = slotInfo
+    ? slotInfo.isRest
+      ? `Sel: m.${slotInfo.measureIndex + 1} · rest`
+      : `Sel: m.${slotInfo.measureIndex + 1} · ${slotInfo.notes.length} ${
+          slotInfo.notes.length === 1 ? "note" : "notes"
+        }`
     : "No selection";
 
   return (
@@ -884,7 +993,7 @@ export function Editor() {
         <button
           type="button"
           onClick={deleteSelection}
-          disabled={!hasSelection}
+          disabled={!canDelete}
           style={toolbarButtonStyle(hasSelection)}
         >
           Delete
@@ -1077,7 +1186,7 @@ export function Editor() {
               removeHandle(handle);
             }
           }}
-          onAddNote={() => addNoteToCurrent()}
+          onAddNote={() => addNoteAtSlot()}
         />
       </div>
 
