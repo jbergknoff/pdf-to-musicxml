@@ -3,6 +3,10 @@
 // exposes `getLiveBeat`/`playing` to drive the renderer's existing on-score
 // cursor + scroll-follow (SheetMusicDisplay's `getLiveBeat`/`isPlaying`), so the
 // visual side comes for free. Mirrors the handoff prototype's startListen/beep.
+// Each note is a small additive tone (fundamental + two harmonics through a
+// lowpass filter, with an attack/decay/release envelope) rather than a single
+// bare oscillator — this mirrors the synth in jbergknoff/piano-practice's
+// MidiPlayer.
 
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import {
@@ -15,6 +19,13 @@ import {
 
 // Fallback tempo (quarter-note BPM) when the score carries no `<sound tempo>`.
 const DEFAULT_BPM = 100;
+
+// Standard MusicXML carries no per-note dynamics, so playback uses a single
+// default velocity (0-127, MIDI-style) for every note.
+const DEFAULT_VELOCITY = 80;
+
+// Tail (seconds) added past each note's nominal duration for the release ramp.
+const RELEASE_TIME = 0.35;
 
 interface BeatStep {
   /** Absolute quarter-note beat of this onset. */
@@ -72,19 +83,54 @@ function flattenBeats(score: ParsedScore): BeatStep[] {
   }));
 }
 
-function beep(ac: AudioContext, frequency: number, ms: number): void {
-  const oscillator = ac.createOscillator();
-  const gain = ac.createGain();
-  oscillator.type = "triangle";
-  oscillator.frequency.value = frequency;
-  oscillator.connect(gain);
-  gain.connect(ac.destination);
+// Sound one note: a fundamental (triangle) plus two quieter harmonics (sine,
+// at 2x and 3x frequency) through a velocity-brightened lowpass filter, with
+// an attack/decay/sustain/release envelope. Richer and less buzzy than a
+// single bare oscillator.
+function beep(
+  ac: AudioContext,
+  frequency: number,
+  ms: number,
+  velocity: number = DEFAULT_VELOCITY,
+): void {
   const t = ac.currentTime;
-  gain.gain.setValueAtTime(0.0001, t);
-  gain.gain.exponentialRampToValueAtTime(0.16, t + 0.012);
-  gain.gain.exponentialRampToValueAtTime(0.0001, t + ms / 1000);
-  oscillator.start(t);
-  oscillator.stop(t + ms / 1000 + 0.05);
+  const duration = ms / 1000;
+  const vol = (velocity / 127) * 0.22;
+  const totalDuration = duration + RELEASE_TIME;
+
+  const filter = ac.createBiquadFilter();
+  filter.type = "lowpass";
+  filter.frequency.value = 800 + (velocity / 127) * 3200;
+  filter.Q.value = 0.5;
+  filter.connect(ac.destination);
+
+  const gain = ac.createGain();
+  gain.connect(filter);
+  gain.gain.setValueAtTime(0, t);
+  gain.gain.linearRampToValueAtTime(vol, t + 0.012);
+  gain.gain.exponentialRampToValueAtTime(vol * 0.55, t + 0.012 + 0.18);
+  gain.gain.setValueAtTime(vol * 0.55, t + duration);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t + duration + RELEASE_TIME);
+
+  const harmonics: { multiple: number; type: OscillatorType; gain: number }[] =
+    [
+      { multiple: 1, type: "triangle", gain: 1 },
+      { multiple: 2, type: "sine", gain: 0.22 },
+      { multiple: 3, type: "sine", gain: 0.08 },
+    ];
+
+  for (const harmonic of harmonics) {
+    const harmonicGain = ac.createGain();
+    harmonicGain.gain.value = harmonic.gain;
+    harmonicGain.connect(gain);
+
+    const oscillator = ac.createOscillator();
+    oscillator.frequency.value = frequency * harmonic.multiple;
+    oscillator.type = harmonic.type;
+    oscillator.connect(harmonicGain);
+    oscillator.start(t);
+    oscillator.stop(t + totalDuration);
+  }
 }
 
 export interface Listen {
