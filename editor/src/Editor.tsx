@@ -43,6 +43,7 @@ import {
   removeNotes,
   serializeDocument,
   setAccidental,
+  setNoteDuration,
 } from "./dom-edit";
 import {
   allSlotsAtBeat,
@@ -61,6 +62,7 @@ import {
 import {
   computeMeasureStartBeats,
   type NoteHighlight,
+  type NoteType,
   type Pitch,
   parseScore,
 } from "./sheet-music/index";
@@ -92,6 +94,16 @@ function isMidi(file: File): boolean {
 // A focused note draws solid accent; its chord-mates draw a lighter tint.
 const FOCUS_COLOR = COLORS.accent;
 const CHORD_TINT = "#84a9e8";
+
+// Undotted note-value → quarter-note beats, for the inspector's duration
+// selector (mirrors dom-edit's own standard-duration table).
+const BEATS_BY_TYPE: Record<NoteType, number> = {
+  whole: 4,
+  half: 2,
+  quarter: 1,
+  eighth: 0.5,
+  "16th": 0.25,
+};
 
 // The current selection: either a whole spine slot (Level 1) — a position that
 // may hold a chord OR a rest — or one focused note within a chord (Level 2). A
@@ -309,6 +321,7 @@ export function Editor() {
         label:
           numParts > 1 ? (staffSlot.partIndex === 0 ? "Treble" : "Bass") : "",
         durationLabel: staffSlot.type,
+        durationBeats: BEATS_BY_TYPE[staffSlot.type],
         isRest: staffSlot.isRest,
         noteOffset: offset,
         notes: rows.map((row) => ({
@@ -486,6 +499,21 @@ export function Editor() {
         return;
       }
       if (setAccidental(documentRef.current, handle, alter)) {
+        setSelection({ kind: "note", handle });
+        commit();
+      }
+    },
+    [editable, documentRef, commit],
+  );
+
+  // Resize the chord at `handle`'s onset (every member together) to a new
+  // standard duration.
+  const setDurationOn = useCallback(
+    (handle: NoteHandle, durationBeats: number) => {
+      if (!editable) {
+        return;
+      }
+      if (setNoteDuration(documentRef.current, handle, durationBeats)) {
         setSelection({ kind: "note", handle });
         commit();
       }
@@ -1265,6 +1293,12 @@ export function Editor() {
             const handle = inspector?.handles[index];
             if (handle) {
               removeHandle(handle);
+            }
+          }}
+          onSetDuration={(index, durationBeats) => {
+            const handle = inspector?.handles[index];
+            if (handle) {
+              setDurationOn(handle, durationBeats);
             }
           }}
           onAddNote={(partIndex) => {

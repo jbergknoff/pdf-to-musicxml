@@ -14,6 +14,7 @@ import {
   removeNotes,
   serializeDocument,
   setAccidental,
+  setNoteDuration,
 } from "./dom-edit";
 import {
   type ChordGroup,
@@ -419,6 +420,84 @@ describe("setAccidental", () => {
     note = chords(reparse(doc))[0].chord.notes[0];
     expect(note.pitch.alter).toBe(0);
     expect(note.accidental).toBe("none");
+  });
+});
+
+describe("setNoteDuration", () => {
+  test("grows a note, consuming the trailing rest", () => {
+    const doc = createBlankDocument();
+    const handle = addNote(doc, {
+      measureIndex: 0,
+      onsetBeatInMeasure: 0,
+      durationBeats: 1,
+      pitch: { step: "C", alter: 0, octave: 5 },
+    }) as NoteHandle;
+
+    expect(setNoteDuration(doc, handle, 2)).toBe(true);
+    const placed = chords(reparse(doc));
+    expect(placed.length).toBe(1);
+    expect(placed[0].onsetBeat).toBe(0);
+    expect(placed[0].chord.type).toBe("half");
+    expect(placed[0].chord.notes[0].pitch.step).toBe("C");
+  });
+
+  test("shrinks a note, refilling the gap with a rest", () => {
+    const doc = createBlankDocument();
+    const handle = addNote(doc, {
+      measureIndex: 0,
+      onsetBeatInMeasure: 0,
+      durationBeats: 4,
+      pitch: { step: "C", alter: 0, octave: 5 },
+    }) as NoteHandle;
+
+    expect(setNoteDuration(doc, handle, 1)).toBe(true);
+    const score = reparse(doc);
+    const placed = chords(score);
+    expect(placed.length).toBe(1);
+    expect(placed[0].chord.type).toBe("quarter");
+    // The freed three beats are rebalanced into rests.
+    const events = score.parts[0].measures[0].events;
+    expect(events.length).toBe(2);
+    expect(isRest(events[1])).toBe(true);
+  });
+
+  test("clamps growth to the gap before the next note", () => {
+    const doc = createBlankDocument();
+    const handle = addNote(doc, {
+      measureIndex: 0,
+      onsetBeatInMeasure: 0,
+      durationBeats: 1,
+      pitch: { step: "C", alter: 0, octave: 5 },
+    }) as NoteHandle;
+    addNote(doc, {
+      measureIndex: 0,
+      onsetBeatInMeasure: 1.5,
+      durationBeats: 1,
+      pitch: { step: "E", alter: 0, octave: 5 },
+    });
+
+    expect(setNoteDuration(doc, handle, 4)).toBe(true);
+    const placed = chords(reparse(doc));
+    // Clamped to the 1.5-beat gap before the next note: a dotted quarter.
+    expect(placed[0].chord.type).toBe("quarter");
+    expect(placed[0].chord.dot).toBe(true);
+    expect(placed[1].onsetBeat).toBe(1.5);
+  });
+
+  test("resizes every member of a chord together", () => {
+    const doc = createBlankDocument();
+    const handle = addNote(doc, {
+      measureIndex: 0,
+      onsetBeatInMeasure: 0,
+      durationBeats: 1,
+      pitch: { step: "C", alter: 0, octave: 5 },
+    }) as NoteHandle;
+    addNoteToChord(doc, handle, { step: "E", alter: 0, octave: 5 });
+
+    expect(setNoteDuration(doc, handle, 2)).toBe(true);
+    const chord = chords(reparse(doc))[0].chord;
+    expect(chord.type).toBe("half");
+    expect(chord.notes.map((n) => n.pitch.step).sort()).toEqual(["C", "E"]);
   });
 });
 
