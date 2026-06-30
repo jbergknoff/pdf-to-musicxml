@@ -507,6 +507,18 @@ export function slotAt(
   return null;
 }
 
+// Every slot at a specific (measureIndex, onsetBeat) position across all parts.
+// Used by the inspector to show notes from all staves when a beat is selected.
+export function allSlotsAtBeat(
+  score: ParsedScore,
+  measureIndex: number,
+  onsetBeat: number,
+): SlotInfo[] {
+  return score.parts
+    .map((_, partIndex) => slotAt(score, measureIndex, onsetBeat, partIndex))
+    .filter((slot): slot is SlotInfo => slot !== null);
+}
+
 // The slot whose onset is nearest `beat`, within `tolerance` quarter-note beats.
 // The rest-aware counterpart of `chordInfoAtBeat`: a click snapped by `beatFromX`
 // to a spine onset lands exactly on its slot. `partIndex` restricts the search to

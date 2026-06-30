@@ -362,7 +362,12 @@ function beatColumnGeometry(
     if (Math.abs(spine.divs[k] - targetDiv) < 1) {
       const left = spine.xs[k] - staffSpace * 0.8;
       const rawRight = k + 1 < spine.xs.length ? spine.xs[k + 1] : measureEndX;
-      const right = rawRight - staffSpace * 0.3;
+      // Cap at the chord's own notehead footprint so a long note (half, whole)
+      // doesn't extend the box all the way to the next onset or barline.
+      const right = Math.min(
+        rawRight - staffSpace * 0.3,
+        spine.xs[k] + staffSpace * 3,
+      );
       return { left, right: Math.max(left + staffSpace, right) };
     }
   }

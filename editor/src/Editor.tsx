@@ -18,7 +18,11 @@ import {
   EditableSheetMusic,
   type EditorGesture,
 } from "./components/EditableSheetMusic";
-import { Inspector, type InspectorModel } from "./components/Inspector";
+import {
+  Inspector,
+  type InspectorModel,
+  type InspectorNoteGroup,
+} from "./components/Inspector";
 import { MetadataDialog } from "./components/MetadataDialog";
 import { ScoreHeader } from "./components/ScoreHeader";
 import {
@@ -41,6 +45,7 @@ import {
   setAccidental,
 } from "./dom-edit";
 import {
+  allSlotsAtBeat,
   chordForHandle,
   chordInfoForHandle,
   idForHandle,
@@ -276,14 +281,46 @@ export function Editor() {
   // The inspector model + the parallel top-first handle list it indexes into.
   // A rest slot yields an empty note list, which the Inspector renders as
   // "Rest · {type}" with an Add-note affordance.
+  // For grand staff, `allSlots` holds one SlotInfo per staff so the inspector
+  // can show notes and Add-note buttons for each staff independently.
   const inspector = useMemo<{
     model: InspectorModel;
     handles: NoteHandle[];
+    allSlots: SlotInfo[];
   } | null>(() => {
     if (!slotInfo) {
       return null;
     }
-    const rows = topFirstNotes(slotInfo);
+    const beatStaffSlots = allSlotsAtBeat(
+      score,
+      slotInfo.measureIndex,
+      slotInfo.onsetBeat,
+    );
+    const numParts = score.parts.length;
+    const flatHandles: NoteHandle[] = [];
+    const noteGroups: InspectorNoteGroup[] = beatStaffSlots.map((staffSlot) => {
+      const rows = topFirstNotes(staffSlot);
+      const offset = flatHandles.length;
+      for (const row of rows) {
+        flatHandles.push(row.handle);
+      }
+      return {
+        partIndex: staffSlot.partIndex,
+        label:
+          numParts > 1 ? (staffSlot.partIndex === 0 ? "Treble" : "Bass") : "",
+        durationLabel: staffSlot.type,
+        isRest: staffSlot.isRest,
+        noteOffset: offset,
+        notes: rows.map((row) => ({
+          key: row.id,
+          label: pitchLabel(row.pitch),
+          alter: row.pitch.alter,
+          focused: focused ? sameHandle(row.handle, focused) : false,
+        })),
+      };
+    });
+
+    const allNoteRows = noteGroups.flatMap((g) => g.notes);
     const measureStart = measureStartBeats[slotInfo.measureIndex] ?? 0;
     const beatType = score.parts[0]?.timeSig?.beatType ?? 4;
     const beatNumber =
@@ -294,14 +331,11 @@ export function Editor() {
         measureNumber: slotInfo.measureIndex + 1,
         beatNumber,
         durationLabel: slotInfo.type,
-        notes: rows.map((row) => ({
-          key: row.id,
-          label: pitchLabel(row.pitch),
-          alter: row.pitch.alter,
-          focused: focused ? sameHandle(row.handle, focused) : false,
-        })),
+        notes: allNoteRows,
+        noteGroups,
       },
-      handles: rows.map((row) => row.handle),
+      handles: flatHandles,
+      allSlots: beatStaffSlots,
     };
   }, [slotInfo, focused, selection, score, measureStartBeats]);
 
@@ -500,26 +534,26 @@ export function Editor() {
     [editable, score, documentRef, commit, reselectSlotAt],
   );
 
-  // Add a note at the current slot. On a chord slot it stacks a chord member
-  // (default a third above the top, via `addNoteToChord`); on a rest slot it
-  // inserts a quarter note, leaving the remainder of the rest as rests
-  // (`addNote` fits the duration to the gap and rebalances). `pitch` is required
-  // for a rest (no existing note to default from).
+  // Add a note at the current slot (or `targetSlot` for a specific staff). On a
+  // chord slot it stacks a chord member (default a third above the top, via
+  // `addNoteToChord`); on a rest slot it inserts a quarter note (`addNote` fits
+  // the duration and rebalances). `pitch` is required for a rest.
   const addNoteAtSlot = useCallback(
-    (pitch?: Pitch) => {
-      if (!editable || !slotInfo) {
+    (pitch?: Pitch, targetSlot?: SlotInfo) => {
+      const slot = targetSlot ?? slotInfo;
+      if (!editable || !slot) {
         return;
       }
-      if (slotInfo.isRest) {
-        const clef = score.parts[slotInfo.partIndex]?.clef;
-        const measureStart = measureStartBeats[slotInfo.measureIndex] ?? 0;
+      if (slot.isRest) {
+        const clef = score.parts[slot.partIndex]?.clef;
+        const measureStart = measureStartBeats[slot.measureIndex] ?? 0;
         const added = addNote(documentRef.current, {
-          measureIndex: slotInfo.measureIndex,
-          onsetBeatInMeasure: slotInfo.onsetBeat - measureStart,
+          measureIndex: slot.measureIndex,
+          onsetBeatInMeasure: slot.onsetBeat - measureStart,
           durationBeats: 1,
           pitch: pitch ?? staffReferencePitch(clef),
           // 1-based staff; addNote ignores it for single-staff documents.
-          staff: slotInfo.partIndex + 1,
+          staff: slot.partIndex + 1,
         });
         if (added) {
           setSelection({ kind: "note", handle: added });
@@ -529,7 +563,7 @@ export function Editor() {
       }
       const added = addNoteToChord(
         documentRef.current,
-        slotInfo.notes[0].handle,
+        slot.notes[0].handle,
         pitch,
       );
       if (added) {
@@ -1229,7 +1263,12 @@ export function Editor() {
               removeHandle(handle);
             }
           }}
-          onAddNote={() => addNoteAtSlot()}
+          onAddNote={(partIndex) => {
+            const targetSlot = inspector?.allSlots.find(
+              (s) => s.partIndex === partIndex,
+            );
+            addNoteAtSlot(undefined, targetSlot);
+          }}
         />
       </div>
 
