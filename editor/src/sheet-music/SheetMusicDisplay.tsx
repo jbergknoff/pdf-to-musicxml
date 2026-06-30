@@ -321,9 +321,9 @@ export function computeCursorX(
 // ── Selection overlay chrome ──────────────────────────────────────────────────
 
 // Finds the SVG x-span (left, right) of the beat column that contains `beat`.
-// The column runs from the onset notehead to just before the next onset (or the
-// measure's closing anchor for the last event). Returns null when the beat does
-// not land on a spine onset (e.g. the score is empty).
+// The box is centered on the main notehead with a symmetric half-width, widened
+// on both sides when grace notes appear to the left. Returns null when the beat
+// does not land on a spine onset (e.g. the score is empty).
 function beatColumnGeometry(
   beat: number,
   score: ParsedScore,
@@ -352,18 +352,45 @@ function beatColumnGeometry(
   const divisionsPerBeat = DIVISIONS * (4 / timeSig.beatType);
   const beatInMeasure = beat - (measureStartBeats[measureIndex] ?? 0);
   const targetDiv = Math.round(beatInMeasure * divisionsPerBeat);
-  const endBarlineX =
-    layout.measureXs[measureIndex] + layout.measureWidths[measureIndex];
-  const nextSpine = layout.measureSpines[measureIndex + 1];
-  const measureEndX = nextSpine?.xs[0] ?? endBarlineX;
 
   const { staffSpace } = layout;
   for (let k = 0; k < spine.divs.length; k++) {
     if (Math.abs(spine.divs[k] - targetDiv) < 1) {
-      const left = spine.xs[k] - staffSpace * 0.8;
-      const rawRight = k + 1 < spine.xs.length ? spine.xs[k + 1] : measureEndX;
-      const right = rawRight - staffSpace * 0.3;
-      return { left, right: Math.max(left + staffSpace, right) };
+      const onsetX = spine.xs[k];
+
+      // Count the maximum number of grace-note groups before this chord across
+      // all parts — grace notes appear to the left of the main notehead and
+      // must be included in the box.
+      let maxGraceGroups = 0;
+      for (const part of score.parts) {
+        const measure = part.measures[measureIndex];
+        if (!measure) {
+          continue;
+        }
+        let beatCursor = 0;
+        const divisions = measure.divisions || DIVISIONS;
+        for (const event of measure.events) {
+          if (Math.abs(beatCursor - beatInMeasure) < 1e-6 && !isRest(event)) {
+            const graces = (event as ChordGroup).gracesBefore?.length ?? 0;
+            if (graces > maxGraceGroups) {
+              maxGraceGroups = graces;
+            }
+            break;
+          }
+          beatCursor +=
+            (isRest(event) ? event.duration : (event as ChordGroup).duration) /
+            divisions;
+        }
+      }
+
+      // Symmetric half-width around the main notehead; grace notes extend the
+      // box leftward (and rightward equally to keep it centred).
+      const graceExtent = maxGraceGroups * GRACE_NOTE_ADVANCE;
+      const halfWidth = Math.max(
+        staffSpace * 1.8,
+        graceExtent + staffSpace * 0.8,
+      );
+      return { left: onsetX - halfWidth, right: onsetX + halfWidth };
     }
   }
   return null;

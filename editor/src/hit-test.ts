@@ -507,6 +507,48 @@ export function slotAt(
   return null;
 }
 
+// The slot active at `onsetBeat` for one part: exact match first, then the
+// latest slot in the same part/measure whose onset is ≤ `onsetBeat` (the rest
+// or chord that covers this rhythmic position, e.g. a whole rest at beat 0
+// when the selected beat is beat 1).
+function staffSlotCoveringBeat(
+  allSlots: SlotInfo[],
+  partIndex: number,
+  measureIndex: number,
+  onsetBeat: number,
+): SlotInfo | null {
+  let best: SlotInfo | null = null;
+  for (const slot of allSlots) {
+    if (slot.partIndex !== partIndex || slot.measureIndex !== measureIndex) {
+      continue;
+    }
+    if (slot.onsetBeat > onsetBeat + 1e-6) {
+      continue;
+    }
+    if (!best || slot.onsetBeat > best.onsetBeat) {
+      best = slot;
+    }
+  }
+  return best;
+}
+
+// Every slot at (or covering) a specific (measureIndex, onsetBeat) position,
+// one per part. Used by the inspector to show notes from all staves when a
+// beat is selected, including staves whose rest spans the selected beat rather
+// than starting exactly on it.
+export function allSlotsAtBeat(
+  score: ParsedScore,
+  measureIndex: number,
+  onsetBeat: number,
+): SlotInfo[] {
+  const all = pickableSlots(score);
+  return score.parts
+    .map((_, partIndex) =>
+      staffSlotCoveringBeat(all, partIndex, measureIndex, onsetBeat),
+    )
+    .filter((slot): slot is SlotInfo => slot !== null);
+}
+
 // The slot whose onset is nearest `beat`, within `tolerance` quarter-note beats.
 // The rest-aware counterpart of `chordInfoAtBeat`: a click snapped by `beatFromX`
 // to a spine onset lands exactly on its slot. `partIndex` restricts the search to
