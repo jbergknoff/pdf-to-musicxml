@@ -198,6 +198,102 @@ function AccidentalControl({
   );
 }
 
+// A small notehead-stem-flag glyph, mirroring the grace note as drawn on the
+// staff (see SheetMusicDisplay's grace rendering) — the slashed variant draws
+// the same diagonal stroke through the stem as an acciaccatura on the score,
+// so the control reads as "what this will look like" rather than an
+// arbitrary icon.
+function GraceGlyph({ slash }: { slash: boolean }) {
+  return (
+    <svg width="13" height="16" viewBox="0 0 13 16" aria-hidden="true">
+      <circle cx="4" cy="12.5" r="2.6" fill="currentColor" />
+      <line
+        x1="6.4"
+        y1="12.5"
+        x2="6.4"
+        y2="2"
+        stroke="currentColor"
+        stroke-width="1.1"
+      />
+      <path
+        d="M6.4 2 C 10 3, 10 6.5, 6.4 7.5"
+        stroke="currentColor"
+        stroke-width="1.1"
+        fill="none"
+      />
+      {slash && (
+        <line
+          x1="3.6"
+          y1="8.5"
+          x2="9.2"
+          y2="3.5"
+          stroke="currentColor"
+          stroke-width="1.3"
+        />
+      )}
+    </svg>
+  );
+}
+
+// The appoggiatura/acciaccatura segmented control — same look as
+// AccidentalControl, but the two options draw the actual grace-note glyph
+// (plain vs. slashed) instead of text, so the current setting and the
+// affordance to change it are both visible at a glance.
+function GraceStyleControl({
+  slash,
+  onSet,
+}: {
+  slash: boolean;
+  onSet: (slash: boolean) => void;
+}) {
+  const options: Array<{ value: boolean; title: string }> = [
+    {
+      value: false,
+      title: "Appoggiatura — leans on the beat, takes time from the main note",
+    },
+    {
+      value: true,
+      title: "Acciaccatura (slashed) — crushed, played as fast as possible",
+    },
+  ];
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        border: `1px solid ${COLORS.borderLight}`,
+        borderRadius: 5,
+        overflow: "hidden",
+      }}
+    >
+      {options.map((option, index) => {
+        const applied = option.value === slash;
+        return (
+          <button
+            key={String(option.value)}
+            type="button"
+            title={option.title}
+            onClick={() => onSet(option.value)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              padding: "2px 6px",
+              border: "none",
+              borderLeft:
+                index === 0 ? "none" : `1px solid ${COLORS.borderLight}`,
+              background: applied ? COLORS.accent : "transparent",
+              color: applied ? "#fff" : COLORS.textPlaceholder,
+              cursor: "pointer",
+              lineHeight: 0,
+            }}
+          >
+            <GraceGlyph slash={option.value} />
+          </button>
+        );
+      })}
+    </span>
+  );
+}
+
 function Stepper({ onStep }: { onStep: (delta: number) => void }) {
   const arrowStyle = {
     border: "none",
@@ -248,29 +344,29 @@ export interface InspectorProps {
   onGraceRemove: (index: number) => void;
   /** Move the grace note's group earlier/later relative to its siblings. */
   onGraceReorder: (index: number, direction: "earlier" | "later") => void;
-  /** Toggle acciaccatura (slashed) vs. appoggiatura (unslashed). */
-  onGraceToggleSlash: (index: number) => void;
+  /** Set acciaccatura (slashed) vs. appoggiatura (unslashed). */
+  onGraceSlash: (index: number, slash: boolean) => void;
   /** When false the panel renders a view-only notice instead of controls. */
   editable: boolean;
 }
 
-// One grace note row: its label, a "grace" indicator (clickable to toggle
-// acciaccatura/appoggiatura), reorder arrows (earlier/later among its
-// siblings), the shared accidental/stepper controls, and a remove button.
+// One grace note row: its label, the appoggiatura/acciaccatura segmented
+// control, reorder arrows (earlier/later among its siblings), the shared
+// accidental/stepper controls, and a remove button.
 function GraceNoteRowEl({
   grace,
   onAccidental,
   onStep,
   onRemove,
   onReorder,
-  onToggleSlash,
+  onSetSlash,
 }: {
   grace: InspectorGraceRow;
   onAccidental: (alter: number) => void;
   onStep: (delta: number) => void;
   onRemove: () => void;
   onReorder: (direction: "earlier" | "later") => void;
-  onToggleSlash: () => void;
+  onSetSlash: (slash: boolean) => void;
 }) {
   return (
     <div
@@ -285,30 +381,7 @@ function GraceNoteRowEl({
         marginLeft: 14,
       }}
     >
-      <button
-        type="button"
-        title={
-          grace.slash
-            ? "Acciaccatura (slashed) — click for appoggiatura"
-            : "Appoggiatura — click for acciaccatura (slashed)"
-        }
-        onClick={onToggleSlash}
-        style={{
-          fontFamily: FONTS.mono,
-          fontSize: 9.5,
-          letterSpacing: ".05em",
-          textTransform: "uppercase",
-          color: grace.slash ? COLORS.accent : COLORS.textFaint,
-          background: "transparent",
-          border: `1px solid ${grace.slash ? COLORS.accent : COLORS.borderLight}`,
-          borderRadius: 4,
-          padding: "1px 5px",
-          flex: "none",
-          cursor: "pointer",
-        }}
-      >
-        {grace.slash ? "Grace ╱" : "Grace"}
-      </button>
+      <GraceStyleControl slash={grace.slash} onSet={onSetSlash} />
       <span
         style={{
           flex: 1,
@@ -396,7 +469,7 @@ function NoteGroupSection({
   onGraceStep,
   onGraceRemove,
   onGraceReorder,
-  onGraceToggleSlash,
+  onGraceSlash,
 }: {
   group: InspectorNoteGroup;
   showLabel: boolean;
@@ -410,7 +483,7 @@ function NoteGroupSection({
   onGraceStep: (flatIndex: number, delta: number) => void;
   onGraceRemove: (flatIndex: number) => void;
   onGraceReorder: (flatIndex: number, direction: "earlier" | "later") => void;
-  onGraceToggleSlash: (flatIndex: number) => void;
+  onGraceSlash: (flatIndex: number, slash: boolean) => void;
 }) {
   return (
     <div style={{ marginBottom: showLabel ? 12 : 0 }}>
@@ -468,7 +541,7 @@ function NoteGroupSection({
                 onStep={(delta) => onGraceStep(flatIndex, delta)}
                 onRemove={() => onGraceRemove(flatIndex)}
                 onReorder={(direction) => onGraceReorder(flatIndex, direction)}
-                onToggleSlash={() => onGraceToggleSlash(flatIndex)}
+                onSetSlash={(slash) => onGraceSlash(flatIndex, slash)}
               />
             );
           })}
@@ -616,7 +689,7 @@ export function Inspector({
   onGraceStep,
   onGraceRemove,
   onGraceReorder,
-  onGraceToggleSlash,
+  onGraceSlash,
   editable,
 }: InspectorProps) {
   const multiStaff = model ? model.noteGroups.length > 1 : false;
@@ -716,7 +789,7 @@ export function Inspector({
                 onGraceStep={onGraceStep}
                 onGraceRemove={onGraceRemove}
                 onGraceReorder={onGraceReorder}
-                onGraceToggleSlash={onGraceToggleSlash}
+                onGraceSlash={onGraceSlash}
               />
             ))}
           </div>
