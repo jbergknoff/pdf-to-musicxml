@@ -485,8 +485,8 @@ describe("isEditableDocument", () => {
     expect(isEditableDocument(parseDocument(rondo))).toBe(true);
   });
 
-  test("a multi-voice grand-staff part (multiple backups per measure) is view-only", () => {
-    // Two voices per staff = 3 backups per measure; too complex for surgical edits.
+  test("a multi-voice grand-staff part (multiple backups per measure) is editable", () => {
+    // Two voices per staff = 3 backups per measure; writeMeasure handles this now.
     const multiVoice = `<?xml version="1.0" encoding="UTF-8"?>
 <score-partwise version="3.1">
   <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
@@ -496,17 +496,17 @@ describe("isEditableDocument", () => {
         <divisions>4</divisions>
         <staves>2</staves>
       </attributes>
-      <note><pitch><step>C</step><octave>5</octave></pitch><duration>4</duration><staff>1</staff></note>
+      <note><pitch><step>C</step><octave>5</octave></pitch><duration>4</duration><voice>1</voice><staff>1</staff></note>
       <backup><duration>16</duration></backup>
-      <note><pitch><step>G</step><octave>4</octave></pitch><duration>4</duration><staff>1</staff></note>
+      <note><pitch><step>G</step><octave>4</octave></pitch><duration>4</duration><voice>2</voice><staff>1</staff></note>
       <backup><duration>16</duration></backup>
-      <note><pitch><step>C</step><octave>3</octave></pitch><duration>4</duration><staff>2</staff></note>
+      <note><pitch><step>C</step><octave>3</octave></pitch><duration>4</duration><voice>5</voice><staff>2</staff></note>
       <backup><duration>16</duration></backup>
-      <note><pitch><step>G</step><octave>2</octave></pitch><duration>4</duration><staff>2</staff></note>
+      <note><pitch><step>G</step><octave>2</octave></pitch><duration>4</duration><voice>6</voice><staff>2</staff></note>
     </measure>
   </part>
 </score-partwise>`;
-    expect(isEditableDocument(parseDocument(multiVoice))).toBe(false);
+    expect(isEditableDocument(parseDocument(multiVoice))).toBe(true);
   });
 
   test("a multi-part score is view-only", () => {
@@ -641,6 +641,93 @@ describe("grand-staff editing", () => {
     // The new measure is all rests in both staves.
     expect(score.parts[0].measures[1].events.every(isRest)).toBe(true);
     expect(score.parts[1].measures[1].events.every(isRest)).toBe(true);
+  });
+});
+
+// A grand-staff fixture with two voices on staff 1: voice 1 has a half note D5,
+// voice 2 has two quarter notes B4+G4 over the same span. Staff 2 has one voice.
+const MULTI_VOICE_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes>
+        <divisions>4</divisions>
+        <time><beats>4</beats><beat-type>4</beat-type></time>
+        <staves>2</staves>
+        <clef number="1"><sign>G</sign><line>2</line></clef>
+        <clef number="2"><sign>F</sign><line>4</line></clef>
+      </attributes>
+      <note><pitch><step>D</step><octave>5</octave></pitch><duration>8</duration><type>half</type><voice>1</voice><staff>1</staff></note>
+      <note><pitch><step>C</step><octave>5</octave></pitch><duration>4</duration><type>quarter</type><voice>1</voice><staff>1</staff></note>
+      <note><pitch><step>D</step><octave>5</octave></pitch><duration>4</duration><type>quarter</type><voice>1</voice><staff>1</staff></note>
+      <backup><duration>16</duration></backup>
+      <note><pitch><step>B</step><octave>4</octave></pitch><duration>4</duration><type>quarter</type><voice>2</voice><staff>1</staff></note>
+      <note><pitch><step>G</step><octave>4</octave></pitch><duration>4</duration><type>quarter</type><voice>2</voice><staff>1</staff></note>
+      <backup><duration>8</duration></backup>
+      <note><pitch><step>G</step><octave>3</octave></pitch><duration>8</duration><type>half</type><voice>5</voice><staff>2</staff></note>
+    </measure>
+  </part>
+</score-partwise>`;
+
+describe("multi-voice grand-staff editing", () => {
+  test("removeNote on voice-1 staff-1 leaves voice-2 staff-1 and staff-2 intact", () => {
+    const doc = parseDocument(MULTI_VOICE_XML);
+    // D5 (voice 1) is note element index 0. Remove it.
+    removeNote(doc, { measureIndex: 0, noteElementIndex: 0 });
+    const score = parseScore(serializeDocument(doc));
+    // Treble (parts[0]): voice 1 first slot becomes rest, but C5 and D5 remain.
+    const treble = score.parts[0].measures[0].events;
+    expect(
+      treble.some(
+        (e) =>
+          !isRest(e) &&
+          (e as ChordGroup).notes.some((n) => n.pitch.step === "C"),
+      ),
+    ).toBe(true);
+    // Voice-2 notes B4 and G4 survive.
+    const bass1 = score.parts[0].measures[0].events;
+    const allSteps = bass1.flatMap((e) =>
+      isRest(e) ? [] : (e as ChordGroup).notes.map((n) => n.pitch.step),
+    );
+    expect(allSteps).toContain("B");
+    expect(allSteps).toContain("G");
+    // Staff 2 (parts[1]): G3 still present.
+    const bassChords = score.parts[1].measures[0].events.filter(
+      (e) => !isRest(e),
+    ) as ChordGroup[];
+    expect(
+      bassChords.some((c) => c.notes.some((n) => n.pitch.step === "G")),
+    ).toBe(true);
+  });
+
+  test("addNote on staff 2 of a multi-voice score leaves staff-1 voices intact", () => {
+    const doc = parseDocument(MULTI_VOICE_XML);
+    addNote(doc, {
+      measureIndex: 0,
+      onsetBeatInMeasure: 2,
+      durationBeats: 1,
+      pitch: { step: "C", alter: 0, octave: 3 },
+      staff: 2,
+    });
+    const score = parseScore(serializeDocument(doc));
+    // Staff 1 treble voices: D5 (voice 1), B4/G4 (voice 2) all survive.
+    const treble = score.parts[0].measures[0].events;
+    const trebleSteps = treble.flatMap((e) =>
+      isRest(e) ? [] : (e as ChordGroup).notes.map((n) => n.pitch.step),
+    );
+    expect(trebleSteps).toContain("D");
+    expect(trebleSteps).toContain("B");
+    expect(trebleSteps).toContain("G");
+    // Staff 2: now has G3 and C3.
+    const bassChords = score.parts[1].measures[0].events.filter(
+      (e) => !isRest(e),
+    ) as ChordGroup[];
+    const bassSteps = bassChords.flatMap((c) =>
+      c.notes.map((n) => n.pitch.step),
+    );
+    expect(bassSteps).toContain("G");
+    expect(bassSteps).toContain("C");
   });
 });
 

@@ -7,14 +7,15 @@
 // — dynamics, slurs, lyrics, voices, layout hints — survives a round-trip by
 // construction.
 //
-// Scope: a single part, one voice per staff — single-staff, or a grand staff
-// with one `<backup>` per measure (see `isEditableDocument`). Within that scope
-// the rewrite preserves chords (including members of unequal duration), grace
-// notes (re-emitted with their host, never folded into its chord), any
-// `<divisions>` value, and irregular bar lengths (pickup/over-full bars are
-// rebuilt to their own length, not the time signature's). A "beat" throughout is
-// one quarter note (matching `computeMeasureStartBeats`), so divisions-per-beat
-// == divisions-per-quarter.
+// Scope: a single part — single-staff, grand staff, or multi-voice staves
+// (see `isEditableDocument`). Within that scope the rewrite preserves chords
+// (including members of unequal duration), grace notes (re-emitted with their
+// host, never folded into its chord), any `<divisions>` value, irregular bar
+// lengths (pickup/over-full bars are rebuilt to their own length, not the time
+// signature's), and multiple voices per staff (each voice group is emitted in
+// order, separated by `<backup>` elements). A "beat" throughout is one quarter
+// note (matching `computeMeasureStartBeats`), so divisions-per-beat ==
+// divisions-per-quarter.
 
 import type { NoteType, Pitch } from "./sheet-music/index";
 
@@ -152,37 +153,13 @@ export function serializeDocument(doc: Document): string {
 // Whether the editor's surgical ops can safely edit this document.
 //
 // Multi-part scores are always view-only (the editor models one part at a time).
-// Single-part documents fall into two cases:
-//   • Single staff (no <staves> / <staves>1</staves>): editable as long as there
-//     is no <backup> element, which would indicate multiple voices per staff —
-//     those can't be safely rewritten by the single-voice writeMeasure.
-//   • Grand staff (<staves>2</staves>): editable when each measure uses at most
-//     one <backup> (one boundary between staves per measure). More backups mean
-//     multiple independent voices per staff — those would be flattened by the
-//     staff-by-staff rebuild writeMeasure does.
+// A document is editable when it has exactly one `<part>`. Multi-part scores
+// (orchestral, ensemble) are view-only because the editor's model is single-part.
+// Within a single part any number of staves and voices is supported: `writeMeasure`
+// groups notes by (staff, voice) and rebuilds the backup structure faithfully.
 export function isEditableDocument(doc: Document): boolean {
   const parts = Array.from(doc.querySelectorAll("part"));
-  if (parts.length !== 1) {
-    return false;
-  }
-  const part = parts[0];
-  const staves = part.querySelector("staves")?.textContent;
-  const staffCount = staves ? Number.parseInt(staves, 10) : 1;
-  if (staffCount > 1) {
-    // Grand staff: editable only when each measure has at most one backup
-    // (= one staff boundary per measure; more means multiple voices per staff).
-    const maxBackupsPerMeasure = staffCount - 1;
-    for (const measureEl of Array.from(part.querySelectorAll("measure"))) {
-      const backups = Array.from(measureEl.children).filter(
-        (c) => c.tagName.toLowerCase() === "backup",
-      ).length;
-      if (backups > maxBackupsPerMeasure) {
-        return false;
-      }
-    }
-    return true;
-  }
-  return part.querySelector("backup") === null;
+  return parts.length === 1;
 }
 
 // The `<measure>` elements of the (single) part, in document order.
@@ -287,6 +264,7 @@ interface RealNote {
   element: Element;
   onsetDivisions: number;
   durationDivisions: number;
+  voice: number;
   // Grace `<note>` elements that immediately precede this note in document order.
   // Grace notes carry no rhythmic duration, so they must ride *with* their host
   // note — re-emitted verbatim just before it — rather than being treated as
@@ -302,7 +280,8 @@ interface RealNote {
 // the parser's `collectStaffItems`), returning only the real notes — rests are
 // dropped because `writeMeasure` regenerates them, and grace notes are attached
 // to the real note they precede (their host) rather than emitted standalone.
-// Single voice, so the result is already onset-ordered and non-overlapping.
+// Handles multiple voices: the cursor is rewound by <backup> elements, so notes
+// from later voices get their correct within-measure onset positions.
 function readRealNotes(measureEl: Element, _divisions: number): RealNote[] {
   const notes: RealNote[] = [];
   let cursor = 0;
@@ -327,12 +306,17 @@ function readRealNotes(measureEl: Element, _divisions: number): RealNote[] {
         child.querySelector("duration")?.textContent ?? "0",
         10,
       );
+      const voice = Number.parseInt(
+        child.querySelector("voice")?.textContent ?? "1",
+        10,
+      );
       const onset = isChord ? lastOnset : cursor;
       if (!isRest) {
         notes.push({
           element: child,
           onsetDivisions: onset,
           durationDivisions,
+          voice,
           graces: pendingGraces,
         });
         pendingGraces = [];
@@ -423,11 +407,12 @@ function setChordFlag(doc: Document, noteEl: Element, isChord: boolean): void {
   }
 }
 
-// Emit one staff's note/rest run into `measureEl`. Called by `writeMeasure` for
-// each staff in turn. `staff` is the staff number to tag freshly created rests
-// with (0 = single-staff document, omit the <staff> element). `measureLength` is
+// Emit one voice's note/rest run into `measureEl`. Called by `writeMeasure` for
+// each (staff, voice) group in turn. `staff` is the staff number to tag freshly
+// created rests with (0 = single-staff document, omit the <staff> element).
+// `voice` is the voice number for fill rests (0 = omit). `measureLength` is
 // the bar's actual length in divisions (`measureContentDivisions`), the target
-// every staff's run is padded out to.
+// every voice's run is padded out to.
 function writeStaffNotes(
   doc: Document,
   measureEl: Element,
@@ -435,11 +420,13 @@ function writeStaffNotes(
   measureLength: number,
   staff: number,
   divisionsPerQuarter: number,
+  voice = 0,
 ): void {
   const makeRest = (durationDivisions: number, fullMeasure = false) =>
     createRestElement(doc, {
       durationDivisions,
       fullMeasure,
+      voice: voice > 0 ? voice : undefined,
       staff: staff > 0 ? staff : undefined,
       divisionsPerQuarter,
     });
@@ -516,15 +503,18 @@ function writeStaffNotes(
 // Re-emit a measure's note/rest run from a list of real notes. Removes every
 // existing `<note>` (rests and notes) and re-appends: each real note's *existing*
 // element verbatim (reused — this is what makes the edit faithful) with freshly
-// built `<rest>` notes filling every gap. Notes sharing an onset are emitted as a
-// chord — ordered low-to-high, the first plain and the rest flagged `<chord/>` —
-// so stacked pitches survive the rewrite. Non-note siblings (`<attributes>`, etc.)
-// keep their relative order; the notes are appended after them.
+// built `<rest>` notes filling every gap. Notes sharing an onset within the same
+// voice are emitted as a chord — ordered low-to-high, the first plain and the
+// rest flagged `<chord/>` — so stacked pitches survive the rewrite. Non-note
+// siblings (`<attributes>`, etc.) keep their relative order; the notes are
+// appended after them.
 //
-// For grand staff (`staffCount > 1`): `notes` may contain notes from all staves;
-// they are split by <staff>, each staff's run is emitted in turn, separated by
-// <backup> elements. Freshly created rests carry the <staff> number of the staff
-// they fill. Existing note elements already carry their own <staff> child.
+// Multi-voice / grand-staff: `notes` may contain notes from multiple staves and
+// voices. They are grouped by (staff, voice) in canonical order (staff 1 before
+// staff 2, lower voice numbers first within each staff). Each group is emitted as
+// a contiguous run, separated from the next by a <backup> element that rewinds to
+// the measure start. Freshly created rests carry the <staff> and <voice> numbers
+// of the group they fill. Existing note elements already carry their own children.
 function writeMeasure(
   doc: Document,
   measureEl: Element,
@@ -538,18 +528,26 @@ function writeMeasure(
   }
 
   if (staffCount <= 1) {
-    writeStaffNotes(
-      doc,
-      measureEl,
-      notes,
-      measureLength,
-      0,
-      divisionsPerQuarter,
+    // Single-staff: check for multiple voices.
+    const voices = [...new Set(notes.map((n) => n.voice))].sort(
+      (a, b) => a - b,
     );
-    return;
+    if (voices.length <= 1) {
+      writeStaffNotes(
+        doc,
+        measureEl,
+        notes,
+        measureLength,
+        0,
+        divisionsPerQuarter,
+      );
+      return;
+    }
+    // Single-staff multi-voice: fall through to the general path below with
+    // staffCount treated as 1 (no <staff> tags on rests).
   }
 
-  // Grand staff: also remove existing backup/forward (they are rebuilt below).
+  // Multi-voice or grand-staff: remove existing backup/forward (rebuilt below).
   for (const el of Array.from(measureEl.querySelectorAll("backup"))) {
     el.remove();
   }
@@ -557,21 +555,42 @@ function writeMeasure(
     el.remove();
   }
 
-  // Emit each staff's notes followed by a <backup> block (except after the last).
-  // The backup rewinds by the bar's actual length so every staff starts from the
-  // same point — using the nominal time-signature length here desyncs the staves
-  // whenever the bar is shorter or longer than the meter says.
-  for (let s = 1; s <= staffCount; s++) {
-    const staffNotes = notes.filter((n) => staffOf(n.element) === s);
+  // Collect the unique (staff, voice) pairs that appear in the notes, in the
+  // canonical order they should be emitted: staff 1 first (ascending voice),
+  // then staff 2 (ascending voice), etc.
+  const groupKeys = new Map<string, { staff: number; voice: number }>();
+  for (const n of notes) {
+    const s = staffCount > 1 ? staffOf(n.element) : 0;
+    const v = n.voice;
+    const key = `${s}:${v}`;
+    if (!groupKeys.has(key)) {
+      groupKeys.set(key, { staff: s, voice: v });
+    }
+  }
+  const groups = [...groupKeys.values()].sort(
+    (a, b) => a.staff - b.staff || a.voice - b.voice,
+  );
+
+  // Emit each (staff, voice) group followed by a <backup>, except the last.
+  // The backup rewinds by the bar's actual length so every group starts from
+  // the same point — using the nominal time-signature length here desyncs the
+  // staves whenever the bar is shorter or longer than the meter says.
+  for (let g = 0; g < groups.length; g++) {
+    const { staff, voice } = groups[g];
+    const groupNotes = notes.filter((n) => {
+      const s = staffCount > 1 ? staffOf(n.element) : 0;
+      return s === staff && n.voice === voice;
+    });
     writeStaffNotes(
       doc,
       measureEl,
-      staffNotes,
+      groupNotes,
       measureLength,
-      s,
+      staff,
       divisionsPerQuarter,
+      voice,
     );
-    if (s < staffCount) {
+    if (g < groups.length - 1) {
       const backupEl = doc.createElement("backup");
       backupEl.appendChild(child(doc, "duration", String(measureLength)));
       measureEl.appendChild(backupEl);
@@ -619,6 +638,8 @@ export function createNoteElement(
     durationDivisions: number;
     type?: NoteType;
     dot?: boolean;
+    /** Voice number for multi-voice staves. Omit for single-voice content. */
+    voice?: number;
     /** Grand-staff only: which staff this note belongs to. Omit for single-staff. */
     staff?: number;
     /** Document divisions-per-quarter (for type/dot inference). Defaults to 4. */
@@ -642,6 +663,9 @@ export function createNoteElement(
   if (dot) {
     noteEl.appendChild(doc.createElement("dot"));
   }
+  if (options.voice !== undefined && options.voice > 0) {
+    noteEl.appendChild(child(doc, "voice", String(options.voice)));
+  }
   if (options.staff !== undefined && options.staff > 0) {
     noteEl.appendChild(child(doc, "staff", String(options.staff)));
   }
@@ -655,6 +679,8 @@ export function createRestElement(
     fullMeasure?: boolean;
     /** Grand-staff only: which staff this rest belongs to. Omit for single-staff. */
     staff?: number;
+    /** Voice number for multi-voice staves. Omit for single-voice content. */
+    voice?: number;
     /** Document divisions-per-quarter (for type/dot inference). Defaults to 4. */
     divisionsPerQuarter?: number;
   },
@@ -677,6 +703,9 @@ export function createRestElement(
     if (dot) {
       noteEl.appendChild(doc.createElement("dot"));
     }
+  }
+  if (options.voice !== undefined && options.voice > 0) {
+    noteEl.appendChild(child(doc, "voice", String(options.voice)));
   }
   if (options.staff !== undefined && options.staff > 0) {
     noteEl.appendChild(child(doc, "staff", String(options.staff)));
@@ -848,7 +877,13 @@ export function addNote(
     staff: targetStaff > 0 ? targetStaff : undefined,
     divisionsPerQuarter: divisions,
   });
-  notes.push({ element, onsetDivisions, durationDivisions: fit, graces: [] });
+  notes.push({
+    element,
+    onsetDivisions,
+    durationDivisions: fit,
+    voice: 1,
+    graces: [],
+  });
   writeMeasure(doc, measureEl, notes, measureLength, divisions, sc);
   return handleFor(measuresOf(doc), options.measureIndex, element);
 }
@@ -941,12 +976,13 @@ export function moveNote(
   const destLength =
     measureContentDivisions(destMeasureEl) || divisionsPerMeasure;
 
-  // Grace notes attached to the moving note (read before any rewrite, while the
-  // element is still in its source measure) so they travel with it.
-  const movingGraces =
-    readRealNotes(sourceMeasureEl, divisions).find(
-      (note) => note.element === element,
-    )?.graces ?? [];
+  // Grace notes and voice attached to the moving note (read before any rewrite,
+  // while the element is still in its source measure) so they travel with it.
+  const movingNote = readRealNotes(sourceMeasureEl, divisions).find(
+    (note) => note.element === element,
+  );
+  const movingGraces = movingNote?.graces ?? [];
+  const movingVoice = movingNote?.voice ?? 1;
 
   // Pitch change is always a faithful in-place mutation.
   setPitch(doc, element, target.pitch);
@@ -987,6 +1023,7 @@ export function moveNote(
     element,
     onsetDivisions,
     durationDivisions: fit,
+    voice: movingVoice,
     graces: movingGraces,
   });
   writeMeasure(doc, destMeasureEl, destNotes, destLength, divisions, sc);
@@ -1091,11 +1128,15 @@ export function addNoteToChord(
 
   const sc = staffCountOf(doc);
   const anchorStaff = sc > 1 ? staffOf(target) : undefined;
+  // Emit <voice> on the element only when voice > 1, so it survives round-trips
+  // in multi-voice measures. Voice 1 is the implicit default and can be omitted.
+  const anchorVoice = anchor.voice;
   const element = createNoteElement(doc, {
     step: newPitch.step,
     alter: newPitch.alter,
     octave: newPitch.octave,
     durationDivisions: anchor.durationDivisions,
+    voice: anchorVoice > 1 ? anchorVoice : undefined,
     staff: anchorStaff,
     divisionsPerQuarter: divisions,
   });
@@ -1103,6 +1144,7 @@ export function addNoteToChord(
     element,
     onsetDivisions: anchor.onsetDivisions,
     durationDivisions: anchor.durationDivisions,
+    voice: anchorVoice,
     graces: [],
   });
   writeMeasure(doc, measureEl, notes, measureLength, divisions, sc);
