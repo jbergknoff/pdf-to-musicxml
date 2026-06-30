@@ -538,8 +538,11 @@ export function Editor() {
   // chord slot it stacks a chord member (default a third above the top, via
   // `addNoteToChord`); on a rest slot it inserts a quarter note (`addNote` fits
   // the duration and rebalances). `pitch` is required for a rest.
+  // `overrideOnsetBeat` lets the caller insert into a covering rest at a
+  // specific beat rather than at the rest's own onset — used when adding a note
+  // to an adjacent staff whose rest spans the selected beat.
   const addNoteAtSlot = useCallback(
-    (pitch?: Pitch, targetSlot?: SlotInfo) => {
+    (pitch?: Pitch, targetSlot?: SlotInfo, overrideOnsetBeat?: number) => {
       const slot = targetSlot ?? slotInfo;
       if (!editable || !slot) {
         return;
@@ -547,9 +550,10 @@ export function Editor() {
       if (slot.isRest) {
         const clef = score.parts[slot.partIndex]?.clef;
         const measureStart = measureStartBeats[slot.measureIndex] ?? 0;
+        const onsetBeat = overrideOnsetBeat ?? slot.onsetBeat;
         const added = addNote(documentRef.current, {
           measureIndex: slot.measureIndex,
-          onsetBeatInMeasure: slot.onsetBeat - measureStart,
+          onsetBeatInMeasure: onsetBeat - measureStart,
           durationBeats: 1,
           pitch: pitch ?? staffReferencePitch(clef),
           // 1-based staff; addNote ignores it for single-staff documents.
@@ -1267,7 +1271,10 @@ export function Editor() {
             const targetSlot = inspector?.allSlots.find(
               (s) => s.partIndex === partIndex,
             );
-            addNoteAtSlot(undefined, targetSlot);
+            // When the target staff's covering slot started before the selected
+            // beat (e.g. a whole rest at beat 0 while beat 1 is selected), pass
+            // the selected beat so the note lands at the right rhythmic position.
+            addNoteAtSlot(undefined, targetSlot, slotInfo?.onsetBeat);
           }}
         />
       </div>
