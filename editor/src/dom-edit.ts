@@ -1044,6 +1044,72 @@ export function moveNote(
   return handleFor(measuresOf(doc), target.measureIndex, element);
 }
 
+// Change a note's rhythmic duration, keeping its onset and pitch. Every chord
+// member sharing the note's onset (in the same staff/voice) is resized with
+// it — chords share one duration intrinsically, so the whole beat moves
+// together. The requested span is clamped to the largest standard duration
+// that fits before the next note in the same staff/voice (or the measure's
+// end); the freed or consumed time is rebalanced into rests by `writeMeasure`.
+// Returns false on a bad handle.
+export function setNoteDuration(
+  doc: Document,
+  handle: NoteHandle,
+  durationBeats: number,
+): boolean {
+  const measureEl = measuresOf(doc)[handle.measureIndex];
+  if (!measureEl) {
+    return false;
+  }
+  const target = elementForHandle(doc, handle);
+  if (!target) {
+    return false;
+  }
+  const { divisions, divisionsPerMeasure } = measureMetrics(doc);
+  const measureLength =
+    measureContentDivisions(measureEl) || divisionsPerMeasure;
+  const notes = readRealNotes(measureEl, divisions);
+  const anchor = notes.find((note) => note.element === target);
+  if (!anchor) {
+    return false;
+  }
+  const sc = staffCountOf(doc);
+  const targetStaff = sc > 1 ? staffOf(target) : 0;
+  const targetVoice = anchor.voice;
+
+  const members = notes.filter(
+    (note) =>
+      note.onsetDivisions === anchor.onsetDivisions &&
+      note.voice === targetVoice &&
+      (targetStaff === 0 || staffOf(note.element) === targetStaff),
+  );
+  const memberSet = new Set(members);
+
+  const requested = Math.max(1, Math.round(durationBeats * divisions));
+  const nextOnset = notes.reduce((min, note) => {
+    if (
+      memberSet.has(note) ||
+      note.voice !== targetVoice ||
+      (targetStaff > 0 && staffOf(note.element) !== targetStaff)
+    ) {
+      return min;
+    }
+    return note.onsetDivisions > anchor.onsetDivisions
+      ? Math.min(min, note.onsetDivisions)
+      : min;
+  }, measureLength);
+  const fit = largestFit(
+    Math.min(requested, nextOnset - anchor.onsetDivisions),
+    divisions,
+  );
+
+  for (const member of members) {
+    setDuration(doc, member.element, fit, divisions);
+    member.durationDivisions = fit;
+  }
+  writeMeasure(doc, measureEl, notes, measureLength, divisions, sc);
+  return true;
+}
+
 // Set (or clear) the printed alteration on a note's pitch: -1 flat, +1 sharp,
 // 0 natural (drops `<alter>`; ±2 for double accidentals). Mutated in place so
 // every other child (ties, articulations, lyrics) survives, and no rhythm

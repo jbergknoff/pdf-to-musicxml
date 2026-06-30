@@ -28,12 +28,59 @@ export interface InspectorNoteGroup {
   label: string;
   /** Note-value name for this staff's slot, e.g. "quarter". */
   durationLabel: string;
+  /** This slot's duration in quarter-note beats (the `onSetDuration` value
+   *  space) — undotted, matching `durationLabel`. */
+  durationBeats: number;
   /** True when this staff's slot is a rest (no notes). */
   isRest: boolean;
   /** Index of this group's first note in the flat handles array. */
   noteOffset: number;
   /** Top-first (descending pitch) note rows; empty for a rest. */
   notes: InspectorNoteRow[];
+}
+
+// Standard, undotted note values offered by the duration selector, largest
+// first — mirrors `dom-edit`'s own standard-duration table.
+const DURATION_OPTIONS: Array<{ label: string; beats: number }> = [
+  { label: "Whole", beats: 4 },
+  { label: "Half", beats: 2 },
+  { label: "Quarter", beats: 1 },
+  { label: "Eighth", beats: 0.5 },
+  { label: "16th", beats: 0.25 },
+];
+
+function DurationSelect({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (beats: number) => void;
+}) {
+  return (
+    <select
+      aria-label="Note duration"
+      value={value}
+      onChange={(event) =>
+        onChange(Number.parseFloat((event.target as HTMLSelectElement).value))
+      }
+      style={{
+        border: `1px solid ${COLORS.borderLight}`,
+        borderRadius: 5,
+        background: COLORS.canvas,
+        color: COLORS.textPrimary,
+        fontFamily: FONTS.mono,
+        fontSize: 11.5,
+        padding: "3px 4px",
+        cursor: "pointer",
+      }}
+    >
+      {DURATION_OPTIONS.map((option) => (
+        <option key={option.beats} value={option.beats}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  );
 }
 
 export interface InspectorModel {
@@ -171,6 +218,9 @@ export interface InspectorProps {
   onStep: (index: number, delta: number) => void;
   onRemove: (index: number) => void;
   onAddNote: (partIndex: number) => void;
+  /** Set the duration (in quarter-note beats) of the chord at `index`'s onset —
+   *  every chord member is resized together. */
+  onSetDuration: (index: number, durationBeats: number) => void;
   /** When false the panel renders a view-only notice instead of controls. */
   editable: boolean;
 }
@@ -183,6 +233,7 @@ function NoteGroupSection({
   onStep,
   onRemove,
   onAddNote,
+  onSetDuration,
 }: {
   group: InspectorNoteGroup;
   showLabel: boolean;
@@ -191,6 +242,7 @@ function NoteGroupSection({
   onStep: (flatIndex: number, delta: number) => void;
   onRemove: (flatIndex: number) => void;
   onAddNote: (partIndex: number) => void;
+  onSetDuration: (flatIndex: number, durationBeats: number) => void;
 }) {
   return (
     <div style={{ marginBottom: showLabel ? 12 : 0 }}>
@@ -227,6 +279,31 @@ function NoteGroupSection({
               ? `Rest · ${group.durationLabel}`
               : group.durationLabel}
           </span>
+        </div>
+      )}
+      {group.notes.length > 0 && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 7,
+            marginBottom: 7,
+          }}
+        >
+          <span
+            style={{
+              fontFamily: FONTS.mono,
+              fontSize: 11,
+              color: COLORS.textFaint,
+            }}
+          >
+            Duration
+          </span>
+          <DurationSelect
+            value={group.durationBeats}
+            onChange={(beats) => onSetDuration(group.noteOffset, beats)}
+          />
         </div>
       )}
       {group.notes.length > 0 && (
@@ -341,6 +418,7 @@ export function Inspector({
   onStep,
   onRemove,
   onAddNote,
+  onSetDuration,
   editable,
 }: InspectorProps) {
   const multiStaff = model ? model.noteGroups.length > 1 : false;
@@ -435,6 +513,7 @@ export function Inspector({
                 onStep={onStep}
                 onRemove={onRemove}
                 onAddNote={onAddNote}
+                onSetDuration={onSetDuration}
               />
             ))}
           </div>
