@@ -134,6 +134,26 @@ describe("buildScore — grand staff", () => {
     expect(xml).toContain("<beats>3</beats>");
     expect(xml).toContain("<duration>12</duration>");
   });
+
+  it("ties within a staff across measures, independently per staff", () => {
+    const xml = buildScore([
+      system(
+        staff(
+          [
+            note("C5", 0, { slurStart: true }),
+            note("C5", 1, { slurStop: true }),
+          ],
+          TREBLE,
+        ),
+        // The bass has an unrelated same-pitch pair with no slur tokens — must
+        // stay untied, proving the two staves' spans don't cross-pollinate.
+        staff([note("C3", 0), note("C3", 1)], BASS),
+      ),
+    ]);
+    expect((xml.match(/<tie /g) ?? []).length).toBe(2);
+    const bassBlock = xml.slice(xml.indexOf("<octave>3</octave>") - 40);
+    expect(bassBlock.split("</note>")[0]).not.toContain("<tie ");
+  });
 });
 
 describe("buildScore — three-stave piano", () => {

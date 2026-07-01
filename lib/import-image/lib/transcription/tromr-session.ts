@@ -78,20 +78,29 @@ async function runEncoder(
 
 /**
  * Run the TrOMR decoder autoregressively until EOS in the rhythm head.
- * Returns the predicted token IDs for rhythm, pitch, and lift (excluding the
- * initial BOS inputs, up to but not including EOS).
+ * Returns the predicted token IDs for rhythm, pitch, lift, and slur (excluding
+ * the initial BOS inputs, up to but not including EOS). The slur head marks
+ * curved-line spans (phrase slurs and ties alike — see vocabulary.ts); it is
+ * fed back into the decoder every step regardless, but is now also recorded
+ * per note so the builder can recover ties (see decode-tokens.ts).
  */
 async function runDecoder(
   decoderSession: InferenceSession,
   context: Float32Array,
   seqLen: number,
-): Promise<{ rhythm: number[]; pitch: number[]; lift: number[] }> {
+): Promise<{
+  rhythm: number[];
+  pitch: number[];
+  lift: number[];
+  slur: number[];
+}> {
   const { numCacheTensors, numHeads, headDim, maxDecodingSteps } =
     TROMR_CONSTANTS;
 
   const rhythmOut: number[] = [];
   const pitchOut: number[] = [];
   const liftOut: number[] = [];
+  const slurOut: number[] = [];
 
   // Start all heads with their respective "beginning" tokens.
   // Rhythm uses BOS (index 1); pitch and lift use NONOTE (index 0, the "."
@@ -99,8 +108,8 @@ async function runDecoder(
   let rhythmToken = BOS;
   let pitchToken = NONOTE;
   let liftToken = NONOTE;
-  // Articulation and slur heads are not used for Phase 3 output but must be
-  // fed because they are decoder inputs.
+  // Articulation is not used for Phase 3 output but must be fed because it is
+  // a decoder input.
   let articulationToken = NONOTE;
   let slurToken = NONOTE;
 
@@ -172,11 +181,15 @@ async function runDecoder(
 
     const outputs = await decoderSession.run(feeds);
 
-    // Logits: out_rhythms / out_pitchs / out_lifts shape [1, 1, vocab_size].
-    // Take the last (only) position's argmax.
+    // Logits: out_rhythms / out_pitchs / out_lifts / out_slurs shape
+    // [1, 1, vocab_size]. Take the last (only) position's argmax.
     const rhythmLogits = outputs.out_rhythms?.data as Float32Array;
     const pitchLogits = outputs.out_pitchs?.data as Float32Array;
     const liftLogits = outputs.out_lifts?.data as Float32Array;
+    const articulationLogits = outputs.out_articulations?.data as
+      | Float32Array
+      | undefined;
+    const slurLogits = outputs.out_slurs?.data as Float32Array | undefined;
 
     if (rhythmLogits === undefined) {
       throw new Error("TrOMR decoder: missing out_rhythms output");
@@ -193,6 +206,14 @@ async function runDecoder(
         : NONOTE;
     const nextLift =
       liftLogits !== undefined ? argmax(liftLogits, 0, liftVocabSize) : NONOTE;
+    const nextArticulation =
+      articulationLogits !== undefined
+        ? argmax(articulationLogits, 0, articulationLogits.length)
+        : NONOTE;
+    const nextSlur =
+      slurLogits !== undefined
+        ? argmax(slurLogits, 0, slurLogits.length)
+        : NONOTE;
 
     // Stop when the rhythm head predicts EOS.
     if (nextRhythm === EOS) {
@@ -202,24 +223,13 @@ async function runDecoder(
     rhythmOut.push(nextRhythm);
     pitchOut.push(nextPitch);
     liftOut.push(nextLift);
+    slurOut.push(nextSlur);
 
     rhythmToken = nextRhythm;
     pitchToken = nextPitch;
     liftToken = nextLift;
-
-    // Also need articulation and slur predictions for next-step inputs.
-    const articulationLogits = outputs.out_articulations?.data as
-      | Float32Array
-      | undefined;
-    const slurLogits = outputs.out_slurs?.data as Float32Array | undefined;
-    articulationToken =
-      articulationLogits !== undefined
-        ? argmax(articulationLogits, 0, articulationLogits.length)
-        : NONOTE;
-    slurToken =
-      slurLogits !== undefined
-        ? argmax(slurLogits, 0, slurLogits.length)
-        : NONOTE;
+    articulationToken = nextArticulation;
+    slurToken = nextSlur;
 
     // Advance KV caches: each cache_out grows by 1 in the seq dimension.
     for (let i = 0; i < numCacheTensors; i++) {
@@ -233,18 +243,23 @@ async function runDecoder(
     }
   }
 
-  return { rhythm: rhythmOut, pitch: pitchOut, lift: liftOut };
+  return { rhythm: rhythmOut, pitch: pitchOut, lift: liftOut, slur: slurOut };
 }
 
 /**
  * Run TrOMR on one detected staff: encode the image crop, then decode
- * autoregressively. Returns the three raw token-ID sequences.
+ * autoregressively. Returns the four raw token-ID sequences.
  */
 export async function runTrOMR(
   sessions: TrOMRSessions,
   image: RgbaImage,
   staff: Staff,
-): Promise<{ rhythm: number[]; pitch: number[]; lift: number[] }> {
+): Promise<{
+  rhythm: number[];
+  pitch: number[];
+  lift: number[];
+  slur: number[];
+}> {
   const { context, seqLen } = await runEncoder(sessions.encoder, image, staff);
   return runDecoder(sessions.decoder, context, seqLen);
 }

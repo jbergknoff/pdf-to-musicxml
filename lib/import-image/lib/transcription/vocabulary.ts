@@ -2,9 +2,10 @@
  * TrOMR token vocabularies for the six parallel output heads produced by the
  * Polyphonic-TrOMR decoder (NetEase, Apache-2.0), as used by the homr project.
  * These lists are pure data — not AGPL code — derived from homr's
- * `homr/transformer/vocabulary.py` `build_rhythm()`, `build_pitch()`, and
- * `build_lift()` functions. The ordering must exactly match the vocabulary
- * baked into the ONNX weights at training time.
+ * `homr/transformer/vocabulary.py` `build_rhythm()`, `build_pitch()`,
+ * `build_lift()`, and `build_slur()` functions. The ordering must exactly match
+ * the vocabulary baked into the ONNX weights at training time (verified against
+ * the served `tromr-decoder.v2.onnx`'s `out_slurs` output width, 5).
  *
  * Rhythm uses Humdrum **kern duration notation:
  *   1=whole, 2=half, 4=quarter, 8=eighth, 16=sixteenth, 32=thirty-second.
@@ -12,6 +13,11 @@
  * Pitch uses note name + octave, e.g. "C4", in descending order (B9 first).
  * Lift encodes accidentals: "#"=sharp, "##"=double-sharp, "N"=natural,
  *   "b"=flat, "bb"=double-flat, "_"=no explicit accidental, "."=nonote.
+ * Slur marks curved-line spans (both phrase slurs and ties — the model does not
+ * distinguish them; a span whose endpoints share the same pitch is a tie, any
+ * other pitch pair is a phrase slur, see `pairTies` in musicxml-builder.ts):
+ *   "slurStart"/"slurStop" open/close a span, "slurStart_slurStop" closes one
+ *   and opens another on the same note, "_"=no slur, "."=nonote.
  */
 
 function buildRhythm(): readonly string[] {
@@ -108,9 +114,16 @@ function buildLift(): readonly string[] {
   return [".", "_", "#", "##", "N", "b", "bb"];
 }
 
+function buildSlur(): readonly string[] {
+  // nonote=".", empty="_", then a note that both closes and opens a span, then
+  // a plain open/close.
+  return [".", "_", "slurStart_slurStop", "slurStart", "slurStop"];
+}
+
 export const RHYTHM_VOCAB: readonly string[] = buildRhythm();
 export const PITCH_VOCAB: readonly string[] = buildPitch();
 export const LIFT_VOCAB: readonly string[] = buildLift();
+export const SLUR_VOCAB: readonly string[] = buildSlur();
 
 // Special token indices in the rhythm vocabulary (same positions as in homr)
 export const PAD = 0; // "PAD"

@@ -8,6 +8,7 @@ import {
   PITCH_VOCAB,
   RHYTHM_VOCAB,
   LIFT_VOCAB,
+  SLUR_VOCAB,
 } from "./vocabulary";
 
 /** Find the token index for a string in a vocab array. */
@@ -384,5 +385,71 @@ describe("decodeTokens", () => {
     );
     expect(result).toHaveLength(1);
     expect(result[0].attributeChange).toBeUndefined();
+  });
+});
+
+describe("decodeTokens — slur tokens", () => {
+  it("sets slurStart/slurStop from the slur token stream", () => {
+    const note4 = indexOf(RHYTHM_VOCAB, "note_4");
+    const pitchC4 = indexOf(PITCH_VOCAB, "C4");
+    const noAcc = indexOf(LIFT_VOCAB, "_");
+    const slurStart = indexOf(SLUR_VOCAB, "slurStart");
+    const slurStop = indexOf(SLUR_VOCAB, "slurStop");
+    const noSlur = indexOf(SLUR_VOCAB, "_");
+
+    const result = decodeTokens(
+      [note4, note4, note4, EOS],
+      [pitchC4, pitchC4, pitchC4, EOS],
+      [noAcc, noAcc, noAcc, EOS],
+      [slurStart, noSlur, slurStop, NONOTE],
+    );
+    expect(result).toHaveLength(3);
+    expect(result[0].slurStart).toBe(true);
+    expect(result[0].slurStop).toBeUndefined();
+    expect(result[1].slurStart).toBeUndefined();
+    expect(result[1].slurStop).toBeUndefined();
+    expect(result[2].slurStart).toBeUndefined();
+    expect(result[2].slurStop).toBe(true);
+  });
+
+  it("sets both flags for a note that closes one span and opens another", () => {
+    const note4 = indexOf(RHYTHM_VOCAB, "note_4");
+    const pitchC4 = indexOf(PITCH_VOCAB, "C4");
+    const noAcc = indexOf(LIFT_VOCAB, "_");
+    const both = indexOf(SLUR_VOCAB, "slurStart_slurStop");
+
+    const result = decodeTokens(
+      [note4, EOS],
+      [pitchC4, EOS],
+      [noAcc, EOS],
+      [both, NONOTE],
+    );
+    expect(result[0].slurStart).toBe(true);
+    expect(result[0].slurStop).toBe(true);
+  });
+
+  it("leaves slurStart/slurStop unset on a rest even under a slur token", () => {
+    const rest4 = indexOf(RHYTHM_VOCAB, "rest_4");
+    const slurStart = indexOf(SLUR_VOCAB, "slurStart");
+
+    const result = decodeTokens(
+      [rest4, EOS],
+      [NONOTE, EOS],
+      [NONOTE, EOS],
+      [slurStart, NONOTE],
+    );
+    expect(result[0].pitch).toBe("rest");
+    expect(result[0].slurStart).toBeUndefined();
+    expect(result[0].slurStop).toBeUndefined();
+  });
+
+  it("defaults to no slur data when the fourth array is omitted", () => {
+    const note4 = indexOf(RHYTHM_VOCAB, "note_4");
+    const pitchC4 = indexOf(PITCH_VOCAB, "C4");
+    const noAcc = indexOf(LIFT_VOCAB, "_");
+
+    const result = decodeTokens([note4, EOS], [pitchC4, EOS], [noAcc, EOS]);
+    expect(result[0].slurStart).toBeUndefined();
+    expect(result[0].slurStop).toBeUndefined();
   });
 });

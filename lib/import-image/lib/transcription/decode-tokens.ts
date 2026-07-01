@@ -17,7 +17,10 @@
  *
  * Pitch tokens use "C4", "D5", etc. Lift tokens use "#", "##", "N", "b",
  * "bb", "_" (no accidental), or "." (nonote). Each rhythm token consumes one
- * corresponding pitch and lift token at the same index.
+ * corresponding pitch and lift token at the same index. An optional fourth
+ * parallel array, slur tokens, is consumed the same way and recorded on the
+ * note as `slurStart`/`slurStop` (see musicxml-builder.ts's `pairTies` for how
+ * that becomes a `<tie>`).
  */
 import type { NoteEvent, ScoreAttributes } from "../types";
 import {
@@ -26,7 +29,14 @@ import {
   parseTimeToken,
   resolveTime,
 } from "./decode-attributes";
-import { EOS, LIFT_VOCAB, PAD, PITCH_VOCAB, RHYTHM_VOCAB } from "./vocabulary";
+import {
+  EOS,
+  LIFT_VOCAB,
+  PAD,
+  PITCH_VOCAB,
+  RHYTHM_VOCAB,
+  SLUR_VOCAB,
+} from "./vocabulary";
 
 type DurationValue = NoteEvent["duration"];
 type AccidentalValue = NoteEvent["accidental"];
@@ -118,11 +128,15 @@ function parseNoteRestToken(token: string): {
  * Barline tokens in the rhythm sequence increment `measureIndex` for
  * subsequent notes. Grace notes are emitted (with `grace: true`); unsupported
  * tokens (clefs, signatures, tuplets, …) are silently skipped.
+ *
+ * `slurIds` is optional (defaults to none, meaning no slur/tie recovery) so
+ * existing three-array callers keep working unchanged.
  */
 export function decodeTokens(
   rhythmIds: ArrayLike<number>,
   pitchIds: ArrayLike<number>,
   liftIds: ArrayLike<number>,
+  slurIds: ArrayLike<number> = [],
 ): NoteEvent[] {
   const notes: NoteEvent[] = [];
   let measureIndex = 0;
@@ -210,6 +224,14 @@ export function decodeTokens(
     const isChord = nextNoteIsChord;
     nextNoteIsChord = false;
 
+    const slurToken = SLUR_VOCAB[slurIds[i] ?? 0] ?? ".";
+    const slurStart =
+      !parsed.isRest &&
+      (slurToken === "slurStart" || slurToken === "slurStart_slurStop");
+    const slurStop =
+      !parsed.isRest &&
+      (slurToken === "slurStop" || slurToken === "slurStart_slurStop");
+
     // Resolve the attribute tokens accumulated since the last note. The opening
     // run (before the first note) is consumed here but not attached — it belongs
     // to the document's opening attributes, not a mid-staff change.
@@ -242,6 +264,12 @@ export function decodeTokens(
     };
     if (parsed.grace) {
       note.grace = true;
+    }
+    if (slurStart) {
+      note.slurStart = true;
+    }
+    if (slurStop) {
+      note.slurStop = true;
     }
     if (firstNoteEmitted && hasChange) {
       note.attributeChange = change;

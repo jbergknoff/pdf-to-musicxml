@@ -63,6 +63,41 @@ function beamLines(beams: BeamElement[]): string[] {
 }
 
 /**
+ * Resolve TrOMR's slur spans into ties, mutating `notes` in place (sets
+ * `tieStart`/`tieStop`). The slur head marks a curved-line span with no
+ * distinction between a tie (same pitch at both ends) and a phrase slur (any
+ * other pitch pair) — MusicXML calls for `<tie>` only in the former case, so a
+ * span is promoted to a tie exactly when its open and close notes share the
+ * same written pitch (step + octave, matching the editor's own tie identity);
+ * a genuine slur is left unmarked, since the pipeline does not otherwise
+ * represent slurs. Grace notes and rests never carry `slurStart`/`slurStop`
+ * (decode-tokens.ts only sets them on pitched, non-grace notes).
+ *
+ * `notes` must be one staff's notes in written (time) order — ties can cross
+ * barlines, so this runs on the whole staff stream before it is split into
+ * measures.
+ */
+function pairTies(notes: NoteEvent[]): void {
+  const openByPitch = new Map<string, NoteEvent>();
+  for (const note of notes) {
+    if (note.pitch === "rest") {
+      continue;
+    }
+    if (note.slurStop) {
+      const opener = openByPitch.get(note.pitch);
+      if (opener !== undefined) {
+        opener.tieStart = true;
+        note.tieStop = true;
+        openByPitch.delete(note.pitch);
+      }
+    }
+    if (note.slurStart) {
+      openByPitch.set(note.pitch, note);
+    }
+  }
+}
+
+/**
  * One `<note>`. When `staffNumber` is given (multi-staff parts), the note also
  * carries `<voice>` and `<staff>`; without it the output is the single-staff,
  * single-voice form. Beams render only at the chosen level(s).
@@ -86,6 +121,25 @@ function noteXml(
   const durationLine = note.grace
     ? ""
     : `  <duration>${dottedDivisions}</duration>`;
+  // <tie> (sound) sits right after <duration>; stop before start lets a note
+  // both end one tie and begin the next (a chain). <notations><tied> (the
+  // printed curve) mirrors it, in the same stop-then-start order.
+  const tieLines: string[] = [];
+  if (note.tieStop) {
+    tieLines.push('  <tie type="stop"/>');
+  }
+  if (note.tieStart) {
+    tieLines.push('  <tie type="start"/>');
+  }
+  const notationsLines: string[] =
+    note.tieStop || note.tieStart
+      ? [
+          "  <notations>",
+          ...(note.tieStop ? ['    <tied type="stop"/>'] : []),
+          ...(note.tieStart ? ['    <tied type="start"/>'] : []),
+          "  </notations>",
+        ]
+      : [];
 
   if (note.pitch === "rest") {
     return [
@@ -125,12 +179,14 @@ function noteXml(
     `    <octave>${escapeXml(octave)}</octave>`,
     "  </pitch>",
     durationLine,
+    ...tieLines,
     voiceLine,
     `  <type>${type}</type>`,
     note.dotted ? "  <dot/>" : "",
     accidentalTag,
     staffLine,
     ...beamLines(beams),
+    ...notationsLines,
     "</note>",
   ]
     .filter(Boolean)
@@ -250,6 +306,9 @@ export function buildMusicXML(
 ): string {
   const attributes = options.attributes ?? {};
   const partName = options.partName ?? "Music";
+  // Resolve TrOMR's slur spans into ties before splitting into measures — a
+  // tie can cross a barline, so this needs the whole staff's note order.
+  pairTies(notes);
   // Group notes by measure. Use the maximum measureIndex rather than the last
   // note's: when notes are concatenated across staves (each staff numbering its
   // own measures from 0), an earlier staff can hold a higher measureIndex than
@@ -496,6 +555,12 @@ export function buildScore(
     offset += span;
   }
   ensureMeasure(0); // always at least one measure
+
+  // Resolve TrOMR's slur spans into ties per staff, over each staff's whole
+  // (cross-measure) note stream — see pairTies.
+  for (let staffIndex = 0; staffIndex < staffCount; staffIndex++) {
+    pairTies(measureStaffNotes.flatMap((staffNotes) => staffNotes[staffIndex]));
+  }
 
   // Resolve the shared meter once: the top staff's recovered time signature, or
   // (when TrOMR emitted none) one inferred from every staff's rhythms, falling

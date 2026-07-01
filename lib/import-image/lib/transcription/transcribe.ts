@@ -48,7 +48,12 @@ export async function transcribeStaves(
   const results: Transcription[] = [];
   for (let index = 0; index < staves.length; index++) {
     const tokens = await runTrOMR(sessions, image, staves[index]);
-    const notes = decodeTokens(tokens.rhythm, tokens.pitch, tokens.lift);
+    const notes = decodeTokens(
+      tokens.rhythm,
+      tokens.pitch,
+      tokens.lift,
+      tokens.slur,
+    );
     const attributes = decodeAttributes(tokens.rhythm);
     const measureCount =
       notes.length === 0 ? 0 : notes[notes.length - 1].measureIndex + 1;

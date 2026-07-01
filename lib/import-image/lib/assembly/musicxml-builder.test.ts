@@ -247,4 +247,57 @@ describe("buildMusicXML", () => {
       (xml.match(/<beam number="1">continue<\/beam>/g) ?? []).length,
     ).toBe(2);
   });
+
+  it("promotes a same-pitch slur span into a tie", () => {
+    const xml = buildMusicXML([
+      note("C4", "half", 0, { slurStart: true }),
+      note("C4", "half", 1, { slurStop: true }),
+    ]);
+    expect(xml).toContain('<tie type="start"/>');
+    expect(xml).toContain('<tie type="stop"/>');
+    expect(xml).toContain('<tied type="start"/>');
+    expect(xml).toContain('<tied type="stop"/>');
+    // <tie> sits right after <duration>, before <voice>/<type>.
+    const startNote = xml.slice(
+      xml.indexOf("<step>C</step>", 0) - 20,
+      xml.indexOf("</note>"),
+    );
+    const durationIndex = startNote.indexOf("<duration>");
+    const tieIndex = startNote.indexOf('<tie type="start"/>');
+    expect(tieIndex).toBeGreaterThan(durationIndex);
+  });
+
+  it("does not tie a slur span whose endpoints have different pitches", () => {
+    const xml = buildMusicXML([
+      note("C4", "half", 0, { slurStart: true }),
+      note("D4", "half", 1, { slurStop: true }),
+    ]);
+    expect(xml).not.toContain("<tie ");
+    expect(xml).not.toContain("<tied ");
+  });
+
+  it("ties across a barline", () => {
+    const xml = buildMusicXML([
+      note("E4", "quarter", 0, { slurStart: true }),
+      note("F4", "quarter", 0),
+      note("E4", "quarter", 1, { slurStop: true }),
+    ]);
+    expect((xml.match(/<tie /g) ?? []).length).toBe(2);
+  });
+
+  it("marks a middle note of a tie chain with both stop and start", () => {
+    const xml = buildMusicXML([
+      note("G4", "quarter", 0, { slurStart: true }),
+      note("G4", "quarter", 0, { slurStart: true, slurStop: true }),
+      note("G4", "quarter", 0, { slurStop: true }),
+    ]);
+    // Stop before start (both) before start — the middle note carries both tags.
+    expect((xml.match(/<tie type="start"\/>/g) ?? []).length).toBe(2);
+    expect((xml.match(/<tie type="stop"\/>/g) ?? []).length).toBe(2);
+  });
+
+  it("leaves an unresolved slurStart with no matching slurStop untied", () => {
+    const xml = buildMusicXML([note("C4", "quarter", 0, { slurStart: true })]);
+    expect(xml).not.toContain("<tie ");
+  });
 });

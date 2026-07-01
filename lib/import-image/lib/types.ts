@@ -132,6 +132,23 @@ export interface NoteEvent {
    * staff's opening attributes are carried separately (see {@link ScoreAttributes}).
    */
   attributeChange?: ScoreAttributes;
+  /**
+   * True when TrOMR's slur head marked this note as opening a curved-line span
+   * (a phrase slur or a tie — the model does not distinguish them). Set by
+   * `decode-tokens.ts`; resolved into `tieStart`/`tieStop` by `pairTies` in
+   * `musicxml-builder.ts`, which promotes a span to a tie exactly when its two
+   * endpoints share the same pitch.
+   */
+  slurStart?: boolean;
+  /** True when TrOMR's slur head marked this note as closing a curved-line span. */
+  slurStop?: boolean;
+  /**
+   * True when this note ties to the adjacent same-pitch note before/after it on
+   * this staff (MusicXML `<tie>` + `<notations><tied>`). Resolved from
+   * `slurStart`/`slurStop` — see {@link slurStart}.
+   */
+  tieStart?: boolean;
+  tieStop?: boolean;
 }
 
 /**
